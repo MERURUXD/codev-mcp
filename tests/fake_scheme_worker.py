@@ -50,6 +50,8 @@ def main() -> int:
         entry.update(status="failed", error="RuntimeError: AUT candidate was discarded: TimeoutExpired")
     if "doubt" in actions:
         entry.update(error="RuntimeError: AUT baseline failed: x; cleanup remaining: [4242]", cleanup_in_doubt=True)
+    if "interrupt" in actions:
+        entry.update(status="interrupted", error="KeyboardInterrupt")
     if entry["status"] == "succeeded":
         report = aut_report()
         entry.update(metrics=extract_metrics(report), candidate={"path": "x", "sha256": "y"},

@@ -9,7 +9,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from codev_mcp.models import LensData
-from codev_mcp.scale import native_command, plan_scaling, run_scale
+from codev_mcp.scale import _session, native_command, plan_scaling, run_scale
 from tests.test_evaluation import dbgauss_lens
 
 EFL, IMAGE_DISTANCE = 100.000123456789, 61.234567
@@ -200,6 +200,20 @@ class RunTests(unittest.TestCase):
                 self.assertFalse(self.output.exists())
                 record = json.loads((bundle / "execution-record.json").read_text(encoding="utf-8"))
                 self.assertEqual(record["steps"][0]["status"], "failed")
+
+    def test_primary_failure_keeps_unconfirmed_cleanup_for_the_scheme_scheduler(self):
+        class Client:
+            def __init__(self, *args):
+                pass
+            def close(self):
+                return {"close_error": "release refused"}
+        primary = ValueError("typed edit refused")
+        def action(client):
+            raise primary
+        with self.assertRaises(ValueError) as raised:
+            _session(self.root / "work", self.root / "logs", "com", 1, Client, action)
+        self.assertIs(raised.exception, primary)
+        self.assertFalse(raised.exception.cleanup_info["cleanup_confirmed"])
 
 
 if __name__ == "__main__":

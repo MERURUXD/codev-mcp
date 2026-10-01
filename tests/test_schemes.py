@@ -11,6 +11,7 @@ from pathlib import Path
 from unittest import mock
 
 from codev_mcp import schemes
+from codev_mcp.cli_cleanup import CleanupError, cleanup_in_doubt
 from codev_mcp.schemes import (comparability, extract_metrics, read_scheme_set, recommend, render_summary,
                                run_schemes)
 
@@ -252,7 +253,7 @@ class RunTests(unittest.TestCase):
         self.aut_calls.append((name, Path(source).read_bytes(), spec["name"], spec_sha256))
         root.mkdir(parents=True)
         if name in self.cleanup_doubt:
-            raise RuntimeError("AUT baseline failed: x; cleanup remaining: [4242]")
+            raise CleanupError("AUT baseline failed: x; cleanup remaining: [4242]", remaining=[4242])
         if name in self.fail_aut:
             raise RuntimeError("AUT candidate was discarded: TimeoutExpired")
         return self.reports.get(name) or report_for()
@@ -421,6 +422,172 @@ class RunTests(unittest.TestCase):
         self.assertEqual(manifest["status"], "partial")
 
     # ------------------------------------------------------------ parallel scheduling (F7)
+
+    def test_diagnostic_deadline_with_confirmed_cleanup_continues_but_remaining_processes_stop(self):
+        for remaining in ([], [4242]):
+            report = report_for()
+            report.update(state="failed", error="after_wavefront cleanup or deadline failure: timed out",
+                          after_wavefront={"state": "failed", "stage_error": True,
+                                           "cleanup_remaining": remaining})
+            self.reports = {"a": report}
+            _, manifest = run_schemes(self.baseline, self.scheme_path({"name": "a"}, {"name": "b"}),
+                                      self.aut_path, self.root / f"cleanup-{len(remaining)}",
+                                      aut_runner=self.aut_runner)
+            self.assertEqual(manifest["schemes"][1]["status"], "skipped" if remaining else "succeeded")
+            self.assertEqual(bool(manifest.get("stop_reason")), bool(remaining))
+
+    def test_cleanup_exceptions_ignore_prose_and_keep_structured_outcome(self):
+        for remaining in ([], [4242]):
+            def failed(*args, **kwargs):
+                raise CleanupError("arbitrary diagnostic wording", remaining=remaining)
+            _, manifest = run_schemes(self.baseline, self.scheme_path({"name": "a"}, {"name": "b"}),
+                                      self.aut_path, self.root / f"exception-{len(remaining)}", aut_runner=failed)
+            self.assertEqual(manifest["schemes"][1]["status"], "skipped" if remaining else "failed")
+        self.assertFalse(cleanup_in_doubt({"error": "cleanup or deadline failure; cleanup remaining: [4242]"}))
+        self.assertFalse(cleanup_in_doubt({"cleanup_error": "earlier close failed", "cleanup_remaining": []}))
+        self.assertTrue(cleanup_in_doubt({"cleanup_remaining": [], "after_wavefront": {
+            "cleanup_confirmed": False}}))  # a different session is still uncertain
+
+    def test_typed_edit_primary_error_preserves_cleanup_uncertainty(self):
+        def leaking(*args, **kwargs):
+            return kwargs["output_dir"], {"status": "failed", "error": "glass refused", "cleanup_confirmed": False}
+        _, manifest = run_schemes(self.baseline, self.scheme_path({"name": "a", "edits": GLASS}, {"name": "b"}),
+                                  self.aut_path, self.root / "out", edit_runner=leaking, aut_runner=self.aut_runner)
+        self.assertEqual([s["status"] for s in manifest["schemes"]], ["failed", "skipped"])
+
+    def test_screening_runs_only_finalists_in_full_and_restarts_the_same_typed_baseline(self):
+        calls = []
+        def runner(source, root, spec, *, spec_sha256):
+            calls.append((root.parent.name, root.parent.parent.name, source.read_bytes(), copy.deepcopy(spec), spec_sha256))
+            return self.aut_runner(source, root, spec, spec_sha256=spec_sha256)
+        self.reports = {"a": report_for(error=5), "b": report_for(error=1, satisfied=False),
+                        "c": report_for(error=3)}
+        design = self.root / "design.json"
+        design.write_text("{}", encoding="utf-8")
+        path, result = run_schemes(self.baseline, self.scheme_path({"name": "a"}, {"name": "b", "edits": GLASS},
+                                                                {"name": "c"}), self.aut_path, self.root / "out",
+                                  aut_runner=runner, edit_runner=self.edit_runner, evaluator=self.evaluator,
+                                  screen_cycles=1, finalists=1, design_spec=design)
+        self.assertEqual([(c[0], c[1]) for c in calls], [("a", "screen"), ("b", "screen"),
+                                                       ("c", "screen"), ("b", "full")])
+        self.assertEqual(calls[1][2], calls[-1][2])  # typed edits rerun, never optimize coarse candidate bytes
+        self.assertTrue(all(c[3]["stages"][0]["error_function"]["MXC"] == 1 for c in calls[:3]))
+        self.assertEqual(calls[-1][3], AUT_SPEC)
+        self.assertIsNone(calls[0][4])  # derived spec cannot claim the original file hash
+        self.assertIsNotNone(calls[-1][4])
+        self.assertEqual(result["screening"]["selected"], ["b"])
+        self.assertEqual([s["status"] for s in result["schemes"]], ["screened_out", "succeeded", "screened_out"])
+        self.assertEqual(len(self.edit_calls), 2)
+        self.assertEqual(len(self.eval_calls), 1)
+        self.assertIn("粗筛与入围", (path / "summary.md").read_text(encoding="utf-8"))
+        self.assertEqual(json.loads((path / "execution-record.json").read_text(encoding="utf-8"))["steps"][0]
+                         ["parameters"]["screen_cycles"], 1)
+
+    def test_screening_keeps_a_finalist_from_each_incomparable_group_and_stable_ties(self):
+        self.reports = {"a": report_for(error=5), "b": report_for(error=5),
+                        "c": report_for(error=0.01, vuy=0.1)}
+        _, result = self.execute({"name": "a"}, {"name": "b"}, {"name": "c"}, screen_cycles=1, finalists=1)
+        self.assertEqual(result["screening"]["selected"], ["a", "c"])
+        self.assertEqual([c[0] for c in self.aut_calls], ["a", "b", "c", "a", "c"])
+        self.assertIsNone(result["recommendation"]["scheme"])
+
+    def test_screening_excludes_failure_nonfinite_error_and_variable_bound_violation(self):
+        items = [entry("failed"), entry("nan", error=float("nan")), entry("inf", error=float("inf")),
+                 entry("bounds", bounds=False), entry("doubt"), entry("ok", satisfied=False)]
+        items[0]["status"] = "failed"
+        items[4]["cleanup_in_doubt"] = True
+        self.assertEqual(schemes.shortlist(items, 2), ["ok"])
+        self.fail_aut = {"a", "b"}
+        _, result = self.execute({"name": "a"}, {"name": "b"}, screen_cycles=1, finalists=1)
+        self.assertEqual(result["status"], "failed")
+        self.assertEqual(len(self.aut_calls), 2)
+        self.assertIsNone(result["recommendation"]["scheme"])
+
+    def test_screening_doubt_never_starts_full_optimization(self):
+        self.cleanup_doubt = {"a"}
+        _, result = self.execute({"name": "a"}, {"name": "b"}, screen_cycles=1, finalists=1)
+        self.assertEqual(result["screening"]["selected"], [])
+        self.assertEqual(len(self.aut_calls), 1)
+        self.assertIn("in doubt", result["stop_reason"])
+
+    def test_screening_interrupt_preserves_the_partial_screening_record(self):
+        def interrupted(*args, **kwargs):
+            raise CleanupError("stage interrupted", remaining=[], interrupted=True)
+        path, result = run_schemes(self.baseline, self.scheme_path({"name": "a"}, {"name": "b"}),
+                                  self.aut_path, self.root / "out", screen_cycles=1, finalists=1, aut_runner=interrupted)
+        self.assertEqual(result["stop_reason"], "interrupted")
+        self.assertEqual(result["screening"]["schemes"][0]["status"], "interrupted")
+        self.assertEqual(result["screening"]["selected"], [])
+        self.assertTrue((path / "summary.md").is_file())
+        self.assertIsNone(result["recommendation"]["scheme"])
+
+    def test_screening_detects_baseline_changes_before_full_optimization(self):
+        def touching(source, root, spec, **kwargs):
+            self.baseline.write_bytes(b"changed")
+            return self.aut_runner(source, root, spec, **kwargs)
+        _, result = run_schemes(self.baseline, self.scheme_path({"name": "a"}), self.aut_path, self.root / "out",
+                                screen_cycles=1, finalists=1, aut_runner=touching)
+        self.assertEqual(len(self.aut_calls), 1)
+        self.assertEqual(result["status"], "failed")
+        self.assertEqual(result["screening"]["selected"], [])
+        self.assertIsNone(result["recommendation"]["scheme"])
+
+    def test_screening_arguments_are_validated_before_creating_output(self):
+        for kwargs in ({"screen_cycles": 1}, {"finalists": 1}, {"screen_cycles": 0, "finalists": 1},
+                       {"screen_cycles": True, "finalists": 1}, {"screen_cycles": 501, "finalists": 1},
+                       {"screen_cycles": 1, "finalists": 0}, {"screen_cycles": 1, "finalists": 9}):
+            with self.subTest(kwargs=kwargs), self.assertRaises(ValueError):
+                self.execute({"name": "a"}, **kwargs)
+        self.assertFalse((self.root / "out").exists())
+
+    def test_parallel_screening_uses_separate_round_workers_and_full_original_specs(self):
+        path, result = run_schemes(self.baseline, self.scheme_path({"name": "a"}, {"name": "b"}),
+                                  self.aut_path, self.root / "out", jobs=2, launcher=self.launcher,
+                                  screen_cycles=1, finalists=1)
+        self.assertEqual(result["screening"]["selected"], ["a"])
+        screen = json.loads((path / "screen/_workers/a.json").read_text(encoding="utf-8"))
+        full = json.loads((path / "full/_workers/a.json").read_text(encoding="utf-8"))
+        self.assertEqual(screen["aut_spec"]["stages"][0]["error_function"]["MXC"], 1)
+        self.assertEqual(full["aut_spec"], AUT_SPEC)
+        self.assertFalse((path / "full/_workers/b.json").exists())
+        self.assertEqual(result["status"], "succeeded")
+
+    def test_interrupted_parallel_screening_worker_prevents_the_full_round(self):
+        path, result = run_schemes(self.baseline, self.scheme_path({"name": "a", "reason": "sleep:0.1,interrupt"},
+                                                                {"name": "b", "reason": "sleep:0.4"}),
+                                  self.aut_path, self.root / "out", jobs=2, launcher=self.launcher,
+                                  screen_cycles=1, finalists=1)
+        self.assertEqual(result["stop_reason"], "interrupted")
+        self.assertEqual(result["screening"]["selected"], [])
+        self.assertFalse((path / "full").exists())
+
+    def test_screening_caps_the_expanded_ramp_without_dropping_typed_changes_or_mutating_original(self):
+        spec = {"schema_version": 1, "kind": "aut_spec", "name": "ramp", "wall_seconds": 60,
+                "field_ramp": {"name": "grow", "steps": [{"fields": [{"field": 2, "y_angle": 3}]},
+                                                         {"fields": [{"field": 2, "y_angle": 6}]}],
+                               "stage": {"variables": [{"surface": 1, "parameter": "radius"}],
+                                         "constraints": [{"operand": "EFL", "relation": ">", "value": 10}],
+                                         "error_function": {"MXC": 5, "MNC": 3}}}}
+        original = copy.deepcopy(spec)
+        (self.root / "ramp.json").write_text(json.dumps(spec), encoding="utf-8")
+        calls = []
+        def runner(source, root, spec, **kwargs):
+            calls.append(copy.deepcopy(spec))
+            return self.aut_runner(source, root, spec, **kwargs)
+        run_schemes(self.baseline, self.scheme_path({"name": "a", "aut_spec": "ramp.json"}),
+                    self.aut_path, self.root / "out", screen_cycles=1, finalists=1, aut_runner=runner)
+        self.assertEqual([s["lens_changes"][0]["value"] for s in calls[0]["stages"]], [3, 6])
+        self.assertEqual([s["error_function"] for s in calls[0]["stages"]], [{"MXC": 1, "MNC": 1}] * 2)
+        self.assertTrue(all(s["constraints"] == spec["field_ramp"]["stage"]["constraints"] for s in calls[0]["stages"]))
+        self.assertEqual(calls[1], original)
+
+    def test_unknown_worker_result_is_a_cleanup_failure(self):
+        result = self.root / "bad-entry.json"
+        for payload in ([], {}, {"name": "other", "status": "succeeded"}):
+            result.write_text(json.dumps(payload), encoding="utf-8")
+            item = schemes._collect("a", self.root, result, 0, time.monotonic())
+            self.assertEqual(item["status"], "failed")
+            self.assertTrue(item["cleanup_in_doubt"])
 
     def launcher(self, request):
         return [sys.executable, str(Path(__file__).with_name("fake_scheme_worker.py")), str(request)]

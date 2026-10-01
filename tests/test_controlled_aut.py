@@ -707,8 +707,10 @@ class ControlledAutTest(unittest.TestCase):
             with (self.subTest(phase=phase),
                   mock.patch.object(aut.subprocess, "Popen", HungProcess),
                   mock.patch.object(aut, "_owned_cleanup", return_value=[]) as cleanup):
-                with self.assertRaisesRegex(RuntimeError, "timed out"):
+                with self.assertRaisesRegex(RuntimeError, "timed out") as raised:
                     aut._run_stage(self.root, phase, payload, seconds=1, label=label)
+                self.assertEqual(raised.exception.cleanup_info["cleanup_remaining"], [])
+                self.assertTrue(raised.exception.cleanup_info["cleanup_confirmed"])
                 cleanup.assert_called_once()
         self.assertEqual(self.store.load_current(self.directory).revision, 0)
 

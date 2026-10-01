@@ -29,6 +29,7 @@ import argparse
 import copy
 import hashlib
 import json
+import math
 import re
 import os
 import shutil
@@ -40,7 +41,8 @@ from pathlib import Path
 from typing import Any, Callable
 
 from . import aut as aut_module
-from .aut_spec import expand_field_ramp, read_aut_spec, validate_aut_spec
+from .aut_spec import MAX_CYCLES, expand_field_ramp, read_aut_spec, validate_aut_spec
+from .cli_cleanup import cleanup_info, cleanup_in_doubt
 from .compare import (PUPIL_FRACTION_TOLERANCE, digest, equal_ray_weighted_rms, pupil_fraction_spread,
                       pupil_fractions, run_comparison, write_json)
 from .edit import run_edit
@@ -55,8 +57,6 @@ MAX_JOBS = MAX_SCHEMES
 INTERRUPT_GRACE_SECONDS = 180
 POLL_SECONDS = 0.5
 NAME = re.compile(r"[A-Za-z0-9_.-]{1,24}")
-#: An error that leaves the CODE V processes in doubt stops the whole set.
-CLEANUP_DOUBT = re.compile(r"cleanup(?! remaining: \[\])", re.IGNORECASE)
 
 
 def _now() -> str:
@@ -168,7 +168,8 @@ def extract_metrics(report: dict) -> dict[str, Any]:
 
 def comparability(schemes: list[dict]) -> dict[str, Any]:
     """Which quantities may be put side by side, and why the others may not."""
-    done = [item for item in schemes if item.get("metrics")]
+    done = [item for item in schemes if item.get("metrics") and item.get("status") == "succeeded"
+            and not item.get("cleanup_in_doubt")]
 
     def groups(key: str, present: Callable[[dict], bool]) -> list[list[str]]:
         found: dict[str, list[str]] = {}
@@ -266,9 +267,59 @@ def recommend(schemes: list[dict], comparable: dict) -> dict[str, Any]:
 
 def _summary_status(schemes: list[dict]) -> str:
     states = [item["status"] for item in schemes]
-    if all(state == "succeeded" for state in states):
+    if "succeeded" in states and all(state in {"succeeded", "screened_out"} for state in states):
         return "succeeded"
     return "partial" if any(state == "succeeded" for state in states) else "failed"
+
+
+def _screen_spec(spec: dict, cycles: int) -> dict:
+    """Limit every expanded stage; keep constraints, typed changes and ramp order."""
+    limited = copy.deepcopy(expand_field_ramp(spec))
+    for stage in limited["stages"]:
+        function = stage["error_function"]
+        function["MXC"] = min(function["MXC"], cycles)
+        if "MNC" in function:
+            function["MNC"] = min(function["MNC"], function["MXC"])
+    validate_aut_spec(limited)
+    return limited
+
+
+def shortlist(entries: list[dict], limit: int) -> list[str]:
+    """Select within every comparable group; coarse constraint violations may improve later."""
+    groups: dict[str, list[tuple[float, int, str]]] = {}
+    for index, item in enumerate(entries):
+        metrics = item.get("metrics") or {}
+        value, signature = metrics.get("final_error"), metrics.get("error_signature")
+        if (item.get("status") != "succeeded" or item.get("cleanup_in_doubt") or not signature
+                or metrics.get("explicit_bounds_satisfied") is not True
+                or isinstance(value, bool) or not isinstance(value, (int, float))
+                or not math.isfinite(value) or value < 0):
+            continue
+        groups.setdefault(signature, []).append((value, index, item["name"]))
+    selected = {name for group in groups.values() for _, _, name in sorted(group)[:limit]}
+    return [item["name"] for item in entries if item["name"] in selected]
+
+
+def _run_round(baseline: Path, schemes: list[dict], specs: dict, directory: Path, manifest: dict, jobs: int, *,
+               design_spec: Path | None, backend: str, timeout: float, edit_runner, aut_runner, evaluator,
+               launcher, max_analyses_per_session: int) -> str | None:
+    if jobs > 1:
+        return _run_parallel(baseline, schemes, specs, directory, manifest, jobs, design_spec=design_spec,
+                             backend=backend, timeout=timeout, launcher=launcher,
+                             max_analyses_per_session=max_analyses_per_session)
+    for index, scheme in enumerate(schemes):
+        spec, sha = specs[scheme["name"]]
+        entry = run_scheme(baseline, scheme, spec, sha, directory / scheme["name"],
+                           design_spec=design_spec, backend=backend, timeout=timeout,
+                           edit_runner=edit_runner, aut_runner=aut_runner, evaluator=evaluator,
+                           sink=manifest["schemes"], max_analyses_per_session=max_analyses_per_session)
+        write_json(directory / "summary.json", manifest)
+        if entry.get("cleanup_in_doubt"):
+            reason = f"scheme {scheme['name']} left its CODE V processes in doubt; the rest were not run"
+            manifest["schemes"].extend({"name": later["name"], "status": "skipped", "error": reason}
+                                       for later in schemes[index + 1:])
+            return reason
+    return None
 
 
 def run_scheme(baseline: Path, scheme: dict, aut_spec: dict, aut_spec_sha: str | None, directory: Path, *,
@@ -299,8 +350,11 @@ def run_scheme(baseline: Path, scheme: dict, aut_spec: dict, aut_spec_sha: str |
             entry["edit"] = {"bundle": str(bundle), "status": manifest["status"],
                              "output_sha256": (manifest.get("output") or {}).get("sha256"),
                              "error": manifest.get("error")}
+            entry["cleanup_in_doubt"] = cleanup_in_doubt(manifest)
             if manifest.get("interrupted"):
                 raise KeyboardInterrupt  # the edit was cut short by Ctrl+C: stop, do not go on to the next scheme
+            if entry["cleanup_in_doubt"]:
+                raise ValueError("the typed edit cleanup was not confirmed")
             if manifest["status"] != "succeeded":
                 raise ValueError(f"the typed edits failed: {manifest.get('error')}")
         else:
@@ -310,6 +364,12 @@ def run_scheme(baseline: Path, scheme: dict, aut_spec: dict, aut_spec_sha: str |
         report = aut_runner(start, directory / "aut", copy.deepcopy(aut_spec), spec_sha256=aut_spec_sha)
         entry["aut"] = {"result": str(directory / "aut" / "result.json"), "state": report.get("state"),
                         "error": report.get("error"), "root": str(directory / "aut")}
+        entry["cleanup_in_doubt"] = entry.get("cleanup_in_doubt", False) or cleanup_in_doubt(report)
+        if report.get("interrupted") or any((report.get(key) or {}).get("interrupted")
+                                            for key in ("before_wavefront", "after_wavefront")):
+            raise KeyboardInterrupt
+        if entry["cleanup_in_doubt"]:
+            raise ValueError(f"the AUT cleanup was not confirmed: {report.get('error')}")
         if report.get("state") != "complete":
             raise ValueError(f"the AUT did not complete: {report.get('error')}")
         entry["metrics"] = extract_metrics(report)
@@ -330,7 +390,7 @@ def run_scheme(baseline: Path, scheme: dict, aut_spec: dict, aut_spec_sha: str |
                     entry["cleanup_in_doubt"] = True
             except (ValueError, RuntimeError, OSError) as exc:
                 entry["evaluation"] = {"status": None, "error": f"{type(exc).__name__}: {exc}"}
-                if CLEANUP_DOUBT.search(entry["evaluation"]["error"]):
+                if cleanup_in_doubt(cleanup_info(exc)) or not cleanup_info(exc):
                     entry["cleanup_in_doubt"] = True
         entry["status"] = "succeeded"
     except KeyboardInterrupt:
@@ -340,8 +400,10 @@ def run_scheme(baseline: Path, scheme: dict, aut_spec: dict, aut_spec_sha: str |
     except (ValueError, RuntimeError, OSError) as exc:
         entry["status"] = "failed"
         entry["error"] = f"{type(exc).__name__}: {exc}"
-        if CLEANUP_DOUBT.search(entry["error"]):
-            entry["cleanup_in_doubt"] = True
+        entry["cleanup_in_doubt"] = entry.get("cleanup_in_doubt", False) or cleanup_in_doubt(cleanup_info(exc))
+        if cleanup_info(exc).get("interrupted"):
+            entry["status"] = "interrupted"
+            raise KeyboardInterrupt from exc
     finally:
         entry["elapsed_seconds"] = round(time.monotonic() - started, 3)
     return entry
@@ -351,7 +413,15 @@ def run_schemes(baseline: Path, scheme_file: Path, aut_spec_path: Path | None, o
                 design_spec: Path | None = None, backend: str = "com", timeout: float = 300.0,
                 edit_runner=run_edit, aut_runner=None, evaluator=run_comparison,
                 jobs: int = 1, launcher: Callable[[Path], list[str]] | None = None,
-                max_analyses_per_session: int = 1) -> tuple[Path, dict]:
+                max_analyses_per_session: int = 1, screen_cycles: int | None = None,
+                finalists: int | None = None) -> tuple[Path, dict]:
+    if (screen_cycles is None) != (finalists is None):
+        raise ValueError("screen_cycles and finalists must be supplied together")
+    if screen_cycles is not None:
+        if type(screen_cycles) is not int or not 1 <= screen_cycles <= MAX_CYCLES:
+            raise ValueError(f"screen_cycles must be an integer 1..{MAX_CYCLES}")
+        if type(finalists) is not int or not 1 <= finalists <= MAX_SCHEMES:
+            raise ValueError(f"finalists must be an integer 1..{MAX_SCHEMES} per comparable group")
     if type(max_analyses_per_session) is not int or not 1 <= max_analyses_per_session <= 8:
         raise ValueError("max_analyses_per_session must be an integer from 1 to 8")
     if type(jobs) is not int or not 1 <= jobs <= MAX_JOBS:
@@ -378,6 +448,8 @@ def run_schemes(baseline: Path, scheme_file: Path, aut_spec_path: Path | None, o
             raise ValueError(f"Scheme {scheme['name']} has no AUT spec: give --aut-spec or an aut_spec per scheme")
     for spec, _ in specs.values():
         validate_aut_spec(expand_field_ramp(spec))
+    screen_specs = {name: (_screen_spec(spec, screen_cycles), None) for name, (spec, _) in specs.items()} \
+        if screen_cycles is not None else None
     if design_spec is not None:
         design_spec = design_spec.resolve()
         if not design_spec.is_file():
@@ -396,27 +468,46 @@ def run_schemes(baseline: Path, scheme_file: Path, aut_spec_path: Path | None, o
     write_json(output_dir / "summary.json", manifest)
     stop_reason = None
     try:
-        if jobs > 1:
-            stop_reason = _run_parallel(baseline, payload["schemes"], specs, output_dir, manifest, jobs,
-                                        design_spec=design_spec, backend=backend, timeout=timeout,
-                                        launcher=launcher, max_analyses_per_session=max_analyses_per_session)
+        runners = {"design_spec": design_spec, "backend": backend, "timeout": timeout,
+                   "edit_runner": edit_runner, "aut_runner": aut_runner, "evaluator": evaluator,
+                   "launcher": launcher, "max_analyses_per_session": max_analyses_per_session}
+        if screen_specs is not None:
+            screening = manifest["screening"] = {"cycles_per_stage": screen_cycles,
+                "finalists_per_group": finalists, "schemes": [], "selected": [],
+                "ranking": "finite final ERR. F., ascending within each error-function signature; ties in file order"}
+            screen_dir = output_dir / "screen"
+            screen_dir.mkdir()
+            stop_reason = _run_round(baseline, payload["schemes"], screen_specs, screen_dir, screening, jobs,
+                                     **{**runners, "design_spec": None})
+            screening["comparability"] = comparability(screening["schemes"])
+            screening["selected"] = shortlist(screening["schemes"], finalists) if stop_reason is None else []
+            write_json(screen_dir / "summary.json", screening)
+            if digest(baseline) != baseline_hash:
+                stop_reason = "The baseline lens changed during screening; full optimization was not started"
+                screening["selected"] = []
+            selected = [s for s in payload["schemes"] if s["name"] in screening["selected"]]
+            if selected:
+                full_dir = output_dir / "full"
+                full_dir.mkdir()
+                stop_reason = _run_round(baseline, selected, specs, full_dir, manifest, jobs, **runners)
+            # Keep all names in input order; screening candidates never become final metrics.
+            full = {item["name"]: item for item in manifest["schemes"]}
+            for item in screening["schemes"]:
+                if item["name"] not in full:
+                    full[item["name"]] = {"name": item["name"],
+                        "status": "skipped" if stop_reason else
+                                  ("screened_out" if item["status"] == "succeeded" else item["status"]),
+                        "error": stop_reason or item.get("error"), "screen_directory": item.get("directory")}
+            manifest["schemes"] = [full[s["name"]] for s in payload["schemes"] if s["name"] in full]
         else:
-            for index, scheme in enumerate(payload["schemes"]):
-                spec, spec_sha = specs[scheme["name"]]
-                entry = run_scheme(baseline, scheme, spec, spec_sha, output_dir / scheme["name"],
-                                   design_spec=design_spec, backend=backend, timeout=timeout,
-                                   edit_runner=edit_runner, aut_runner=aut_runner, evaluator=evaluator,
-                                   sink=manifest["schemes"], max_analyses_per_session=max_analyses_per_session)
-                write_json(output_dir / "summary.json", manifest)
-                if entry.get("cleanup_in_doubt"):
-                    stop_reason = f"scheme {scheme['name']} left its CODE V processes in doubt; the rest were not run"
-                    for later in payload["schemes"][index + 1:]:
-                        manifest["schemes"].append({"name": later["name"], "status": "skipped", "error": stop_reason})
-                    break
+            stop_reason = _run_round(baseline, payload["schemes"], specs, output_dir, manifest, jobs, **runners)
     except KeyboardInterrupt:
         stop_reason = "interrupted"
     finally:
-        manifest["baseline"]["unchanged"] = digest(baseline) == baseline_hash
+        try:
+            manifest["baseline"]["unchanged"] = digest(baseline) == baseline_hash
+        except OSError:
+            manifest["baseline"]["unchanged"] = False
         manifest["status"] = _summary_status(manifest["schemes"]) if manifest["schemes"] else "failed"
         if stop_reason:
             manifest["stop_reason"] = stop_reason
@@ -426,6 +517,9 @@ def run_schemes(baseline: Path, scheme_file: Path, aut_spec_path: Path | None, o
             manifest["error"] = "The baseline lens changed during the run"
         manifest["comparability"] = comparability(manifest["schemes"])
         manifest["recommendation"] = recommend(manifest["schemes"], manifest["comparability"])
+        if not manifest["baseline"]["unchanged"]:
+            manifest["recommendation"] = {"scheme": None, "criteria": "基线哈希必须保持一致。",
+                                          "reason": "基线已变化或无法核对，不推荐候选。"}
         manifest["finished_at"] = _now()
         write_json(output_dir / "summary.json", manifest)
         (output_dir / "summary.md").write_text(render_summary(manifest), encoding="utf-8", newline="\n")
@@ -434,11 +528,13 @@ def run_schemes(baseline: Path, scheme_file: Path, aut_spec_path: Path | None, o
             inputs=[{"role": "baseline", "path": str(baseline), "sha256": baseline_hash},
                     {"role": "scheme_set", "path": str(scheme_file), "sha256": scheme_sha}],
             parameters={"schemes": [item["name"] for item in manifest["schemes"]], "jobs": jobs,
-                        "max_analyses_per_session": max_analyses_per_session}, native_commands=[],
+                        "max_analyses_per_session": max_analyses_per_session,
+                        "screen_cycles": screen_cycles, "finalists_per_group": finalists}, native_commands=[],
             command_note=("Each scheme ran codev_mcp.edit and codev_mcp.aut in its own subdirectory"
                           + (f" ({jobs} at a time, each in its own worker process)" if jobs > 1 else "")
                           + "; their execution records hold the native commands. Nothing was accepted."),
             results={"recommendation": manifest["recommendation"], "comparability": manifest["comparability"],
+                     "screening": manifest.get("screening"),
                      "schemes": [{key: item.get(key) for key in ("name", "status", "metrics", "candidate", "error")}
                                  for item in manifest["schemes"]]},
             outputs=[], bundle=str(output_dir), error=manifest.get("error"))])
@@ -475,7 +571,10 @@ def _collect(name: str, directory: Path, result_path: Path, returncode: int, sta
     """The entry a finished worker left; a worker that left none is a failure with its processes in doubt."""
     if result_path.is_file():
         try:
-            return json.loads(result_path.read_text(encoding="utf-8"))
+            entry = json.loads(result_path.read_text(encoding="utf-8"))
+            if (isinstance(entry, dict) and entry.get("name") == name
+                    and entry.get("status") in {"succeeded", "failed", "interrupted"}):
+                return entry
         except (OSError, json.JSONDecodeError):
             pass
     return {"name": name, "status": "failed", "directory": str(directory),
@@ -534,7 +633,9 @@ def _run_parallel(baseline: Path, schemes: list[dict], specs: dict, output_dir: 
         entry = _collect(name, job["directory"], job["result"], job["process"].returncode, job["started"])
         entries[name] = entry
         publish()
-        if entry.get("cleanup_in_doubt") and stop_reason is None:
+        if entry.get("status") == "interrupted":
+            stop_reason = "interrupted"
+        elif entry.get("cleanup_in_doubt") and stop_reason is None:
             stop_reason = f"scheme {name} left its CODE V processes in doubt; the rest were not run"
 
     try:
@@ -582,7 +683,8 @@ def _num(value, digits: int = 6) -> str:
     return f"{value:.{digits}g}" if isinstance(value, float) else str(value)
 
 
-STATUS_TEXT = {"succeeded": "完成", "failed": "失败", "skipped": "未运行", "interrupted": "中断"}
+STATUS_TEXT = {"succeeded": "完成", "failed": "失败", "skipped": "未运行", "interrupted": "中断",
+               "screened_out": "未入围"}
 VERDICT_TEXT = {"pass": "通过", "fail": "未通过", "unknown": "未知", None: "—"}
 
 
@@ -611,6 +713,19 @@ def render_summary(manifest: dict) -> str:
              "每个方案：类型化修改 → 分阶段 AUT → 候选。**所有候选都未被接受**；接受需要另外运行 `codev_mcp.aut accept`。", ""]
     if manifest.get("stop_reason"):
         lines += [f"> 停止原因：{manifest['stop_reason']}", ""]
+    if manifest.get("screening"):
+        screening = manifest["screening"]
+        lines += ["## 粗筛与入围", "",
+                  f"每阶段最多 {screening['cycles_per_stage']} 循环；每个误差函数可比组最多选 "
+                  f"{screening['finalists_per_group']} 个。按有限 ERR. F. 由小到大、相同值按方案文件顺序选取。",
+                  "完整优化从原始基线重新执行该方案的修改与原 AUT 规格；粗筛数值不混入最终推荐。",
+                  "约束在少量循环后未满足不直接淘汰；变量界、完成状态和清理状态仍必须可靠。", "",
+                  "| 方案 | 粗筛状态 | 粗筛 ERR. F. | 入围 |", "| --- | --- | ---: | --- |"]
+        for item in screening["schemes"]:
+            lines.append(f"| {item['name']} | {STATUS_TEXT.get(item['status'], item['status'])} | "
+                         f"{_num((item.get('metrics') or {}).get('final_error'))} | "
+                         f"{'是' if item['name'] in screening['selected'] else '否'} |")
+        lines.append("")
     lines += ["## 方案与结果", "",
               "| 方案 | 状态 | 阶段 | ERR. F. 初始→最终 | WAV 加权 RMS（waves）起始→候选 | Strehl 候选 | 约束全部满足 | 变量界 | 规格判定 |",
               "| --- | --- | --- | --- | --- | --- | --- | --- | --- |"]
@@ -686,11 +801,14 @@ def main(argv=None) -> int:
     parser.add_argument("--timeout", type=float, default=300)
     parser.add_argument("--jobs", type=int, default=1,
                         help=f"同时运行的方案数（1～{MAX_JOBS}，默认 1）；每个方案在自己的工作进程和 CODE V 会话中运行")
+    parser.add_argument("--screen-cycles", type=int, help="粗筛：每个 AUT 阶段的循环上限，须同时指定 --finalists")
+    parser.add_argument("--finalists", type=int, help="每个误差函数可比组入围完整优化的方案数（1～8）")
     args = parser.parse_args(argv)
     try:
         directory, manifest = run_schemes(args.lens, args.schemes, args.aut_spec, args.output_dir,
                                           design_spec=args.design_spec, backend=args.backend, timeout=args.timeout,
-                                          jobs=args.jobs, max_analyses_per_session=args.max_analyses_per_session)
+                                          jobs=args.jobs, max_analyses_per_session=args.max_analyses_per_session,
+                                          screen_cycles=args.screen_cycles, finalists=args.finalists)
     except (OSError, ValueError) as exc:
         print(str(exc), file=sys.stderr)
         return 1

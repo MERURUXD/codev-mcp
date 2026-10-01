@@ -21,6 +21,7 @@ from datetime import datetime
 from pathlib import Path
 
 from .compare import ROOT, assert_equivalent, digest, optical_state, provenance, write_json
+from .cli_cleanup import cleanup_info
 from .fieldset import field_set_commands, resolve_field_set
 from .models import FieldSetReplacement, LensData, LensField, ParameterEdit
 from .record import execution_step, write_record
@@ -183,9 +184,11 @@ def run_edit(source: Path, edits_path: Path, output: Path, *, backend: str = "co
             raise ValueError("Output copy does not match the verified edited lens")
         manifest["output"] = {"path": str(output), "sha256": edited_hash, "bundle_copy": "edited.len"}
         manifest["status"] = "succeeded"
+        manifest["cleanup_confirmed"] = True
     except (Exception, KeyboardInterrupt) as exc:
         manifest["status"] = "failed"
         manifest["error"] = f"{type(exc).__name__}: {exc}"
+        manifest.update(cleanup_info(exc))
         if isinstance(exc, KeyboardInterrupt):
             manifest["interrupted"] = True  # callers that loop over runs must stop (F8)
     finally:

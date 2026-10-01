@@ -31,6 +31,7 @@ from .aut_spec import (DEFAULT_RELATIVE_TOLERANCE, GENERAL_CHECKS, SPECIFIC_OPER
 from .checkpoints import (VIGNETTING_NAMES, LensCheckpointStore, LensSnapshot, compare_snapshots,
                           hash_file, read_snapshot, utc_now, write_json_atomic)
 from .com_backend import ComBackend
+from .cli_cleanup import CleanupError, cleanup_info
 from .com_session import _matching_owned, list_codev_processes, shared_server_pids, terminate_processes
 from .errors import CodeVError
 from .evaluation import evaluate
@@ -359,17 +360,19 @@ def _run_stage(root: Path, phase: str, payload: dict[str, Any], *,
         child.wait(timeout=10)
         remaining = _owned_cleanup(root / ("baseline-engine" if phase == "baseline" else
                                   payload["directory"]), launched_after=launched_after)
-        raise RuntimeError(f"AUT {label} interrupted or timed out; cleanup remaining: {remaining}") from exc
+        raise CleanupError(f"AUT {label} interrupted or timed out; cleanup remaining: {remaining}",
+                           remaining=remaining, interrupted=isinstance(exc, KeyboardInterrupt)) from exc
     result = _json(result_path) if result_path.is_file() else {
         "state": "failed", "error": f"stage exited {child.returncode} without a result"}
     if result["state"] != "complete" or child.returncode != 0:
         remaining = _owned_cleanup(root / ("baseline-engine" if phase == "baseline" else
                                    payload["directory"]), launched_after=launched_after)
-        raise RuntimeError(f"AUT {label} failed: {result.get('error')}; "
-                           f"cleanup remaining: {remaining}")
+        raise CleanupError(f"AUT {label} failed: {result.get('error')}; "
+                           f"cleanup remaining: {remaining}", remaining=remaining)
     if phase == "diagnostic" and result["value"].get("cleanup_unconfirmed"):
         result["value"]["cleanup_remaining"] = _owned_cleanup(
             root / payload["directory"], launched_after=launched_after)
+        result["value"]["cleanup_confirmed"] = not result["value"]["cleanup_remaining"]
     return result["value"]
 
 
@@ -590,13 +593,16 @@ def _spec_child(config_path: Path) -> int:
             # An AUT that did not hand back its prompt: no more COM calls.
             result["discarded_unterminated_session"] = True
             result["cleanup_remaining"] = _owned_cleanup(engine_dir, launched_after=launched_after)
+            result["cleanup_confirmed"] = not result["cleanup_remaining"]
         else:
             try:
                 status = backend.close_session()
+                result["cleanup_confirmed"] = (status.details or {}).get("cleanup_confirmed") is True
                 if (status.details or {}).get("cleanup_confirmed") is not True:
                     result["cleanup_error"] = f"candidate cleanup unconfirmed: {status.details}"
                     result["state"] = "failed"
             except Exception as exc:
+                result["cleanup_confirmed"] = False
                 result["cleanup_error"] = f"{type(exc).__name__}: {exc}"
                 result["state"] = "failed"
         write_json_atomic(root / "child-result.json", result)
@@ -653,7 +659,7 @@ def prepare_spec(source: Path, root: Path, spec: dict[str, Any], *,
     try:
         baseline.update(_run_stage(root, "baseline", baseline))
     except Exception as exc:
-        failed = {**baseline, "state": "failed", "phase": "baseline", "error": str(exc)}
+        failed = {**baseline, "state": "failed", "phase": "baseline", "error": str(exc), **cleanup_info(exc)}
         write_json_atomic(root / "result.json", failed)
         _record_prepare(root, failed)
         raise
@@ -674,16 +680,19 @@ def prepare_spec(source: Path, root: Path, spec: dict[str, Any], *,
         child.wait(timeout=10)
         remaining = _owned_cleanup(root / "candidate-engine", launched_after=launched_after)
         failure = {"state": "failed", "error": type(exc).__name__,
-                   "cleanup_remaining": remaining}
+                   "cleanup_remaining": remaining, "cleanup_confirmed": not remaining,
+                   "interrupted": isinstance(exc, KeyboardInterrupt)}
         write_json_atomic(root / "result.json", {**baseline, **failure})
         _audit(root, "candidate_discarded", failure)
         _record_prepare(root, {**baseline, **failure})
-        raise RuntimeError(f"AUT candidate was discarded: {type(exc).__name__}") from exc
+        raise CleanupError(f"AUT candidate was discarded: {type(exc).__name__}", remaining=remaining,
+                           interrupted=isinstance(exc, KeyboardInterrupt)) from exc
     child_result = _json(root / "child-result.json") if (root / "child-result.json").is_file() else {
         "state": "failed", "error": f"candidate worker exited {child.returncode} without a result"}
     if child_result["state"] != "complete":
         child_result["cleanup_remaining"] = _owned_cleanup(
             root / "candidate-engine", launched_after=launched_after)
+        child_result["cleanup_confirmed"] = not child_result["cleanup_remaining"]
     if hash_file(source) != source_digest:
         child_result = {**child_result, "state": "failed", "error": "source lens changed during AUT"}
     if child_result["state"] == "complete":
@@ -696,7 +705,7 @@ def prepare_spec(source: Path, root: Path, spec: dict[str, Any], *,
                                                label=key)
             except Exception as exc:
                 child_result[key] = {"state": "failed", "stage_error": True,
-                                     "error": str(exc)}
+                                     "error": str(exc), **(cleanup_info(exc) or {"cleanup_confirmed": False})}
             if child_result[key].get("cleanup_unconfirmed") or child_result[key].get("stage_error"):
                 child_result["state"] = "failed"
                 child_result["error"] = f"{key} cleanup or deadline failure: {child_result[key].get('error')}"

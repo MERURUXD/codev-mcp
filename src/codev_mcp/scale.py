@@ -180,8 +180,12 @@ def _session(work: Path, log_dir: Path, backend: str, timeout: float, client_fac
         except Exception as exc:  # noqa: BLE001 - recorded, and it fails the run
             cleanup = {"close_error": f"{type(exc).__name__}: {exc}"}
         write_json(log_dir / "cleanup.json", cleanup)
-        if not _confirmed_cleanup(cleanup) and primary is None:
-            raise RuntimeError(f"Session cleanup was not confirmed: {cleanup}")
+        if primary is not None:
+            primary.cleanup_info = {"cleanup_confirmed": _confirmed_cleanup(cleanup)}
+        elif not _confirmed_cleanup(cleanup):
+            error = RuntimeError(f"Session cleanup was not confirmed: {cleanup}")
+            error.cleanup_info = {"cleanup_confirmed": False}
+            raise error
 
 
 def run_scale(source: Path, output: Path, *, target_efl: float | None = None, factor: float | None = None,

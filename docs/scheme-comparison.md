@@ -5,6 +5,7 @@
 ```powershell
 .\.venv\Scripts\python.exe -m codev_mcp.schemes --lens base.len --schemes schemes.json --aut-spec aut.json --output-dir <工作目录>\new-run [--design-spec spec.json]
 .\.venv\Scripts\python.exe -m codev_mcp.schemes --lens base.len --schemes schemes.json --aut-spec aut.json --design-spec spec.json --max-analyses-per-session 8 --jobs 2 --output-dir <工作目录>\new-fast-run
+.\.venv\Scripts\python.exe -m codev_mcp.schemes --lens base.len --schemes schemes.json --aut-spec aut.json --screen-cycles 2 --finalists 1 --output-dir <工作目录>\new-screened-run
 ```
 
 ## 方案文件（schema 1）
@@ -23,6 +24,17 @@
 - `aut_spec`（相对方案文件的路径）覆盖默认的 `--aut-spec`，用来比较不同的约束集；规格可含 `field_ramp`。所有规格在运行前校验，缺规格、路径不存在、输出目录已存在或含非 ASCII 字符（CODE V 10.2 要求）都在运行任何 CODE V 之前拒绝。
 - 方案默认按文件顺序串行运行（一次一个 CODE V 会话）。`--jobs N`（1～8，即一个方案集最多的方案数）让 N 个方案同时运行：每个方案在自己的工作进程和 CODE V 会话中做与串行完全相同的事，汇总里的顺序仍是方案文件的顺序（见下面的“并行运行”）。单个方案失败（修改被拒、AUT 未完成、超时）只记录该方案并继续其余方案；若某方案留下无法确认的 CODE V 进程，则不再启动新方案、已在运行的自然结束、其余方案标为“未运行”；`Ctrl+C` 保留已完成的部分。
 
+## 两阶段比较（可选）
+
+同时指定 `--screen-cycles N --finalists K`，先对全部方案粗筛，再对入围方案完整优化。不指定时仍对所有方案完整运行。
+
+- `N` 为 1～500 的整数：展开 `field_ramp` 后，每个阶段的 `MXC` 取原值与 N 的较小值，`MNC` 随之限制；变量、约束、误差函数的其余设置、类型化修改和视场爬升顺序保留。粗筛仍执行 AUT 的回读、候选保存重开和 WAV 诊断，不做 `--design-spec` 评价。
+- `K` 为 1～8 的整数，表示**每个误差函数可比组**最多入围 K 个，不是跨组的总名额。只在粗筛完成、清理无疑、变量界满足且最终 `ERR. F.` 有限的方案中，按组内 `ERR. F.` 从小到大选择；相同值按方案文件顺序。少量循环后的具体约束未满足可能在后续优化中改善，因此不直接据此淘汰。设置不同的组分别保留候选，不比较跨组的误差函数。
+- 完整阶段从原始基线重新执行该方案的类型化修改和原始 AUT 规格；每次独立会话。最终规格评价和推荐只使用完整阶段的结果。粗筛排序可能与完整优化排序不同，减少完整运行次数不保证缩短总时间。
+- 粗筛清理存疑、中断或基线哈希变化时，不进入完整阶段；没有有效入围方案时不推荐。`--jobs` 对两阶段分别生效，粗筛全部结束后才启动完整阶段。
+
+两阶段目录为 `screen/<方案>/`、`full/<方案>/`；并行请求分别放在各阶段的 `_workers/`。`summary.json.screening` 保留粗筛指标、排序依据、可比组与入围名单；汇总表并列粗筛与完整结果，未入围方案记为 `screened_out`，其粗筛候选不作为最终候选或推荐。基线已变化或无法核对时，不提供接受建议。
+
 ## 并行运行（`--jobs`）
 
 `python -m codev_mcp.schemes ... --jobs 3` 同时运行至多 3 个方案（上限 8，默认 1）。
@@ -30,6 +42,7 @@
 - 每个方案交给独立的工作进程（`python -m codev_mcp.schemes _scheme <请求文件>`），进程再去调用 `codev_mcp.edit` 与 `codev_mcp.aut`，与串行时完全一样，所以每个方案的隔离、清理和中断行为不变。请求、结果与错误输出放在输出目录的 `_workers/`。
 - 各个会话的启动由机器级互斥量排队（一次一个），归属记录因此只含各自的进程；`cvcomsvr.exe` 是所有同时运行的会话共享的，只要还有别的会话在用就不会被结束。
 - 一个工作进程没有留下结果就退出，按“清理存疑”处理并停止新方案；`Ctrl+C` 后等待工作进程自己清理（180 秒），仍未结束的被强制结束并标为存疑。串行运行中被 `Ctrl+C` 打断的方案记为 `interrupted`，其后的方案不再运行。
+- 清理是否存疑由 `cleanup_confirmed`、`cleanup_remaining` 和各诊断／评价会话的结构化状态判断。最终归属检查确认无残留时，诊断超时只使该方案失败，后续方案可继续；错误消息中的 “cleanup” 字样不决定调度。不同会话的未确认状态仍分别保留。
 - 并行会话会增加内存和许可证使用量，按机器资源选择 `--jobs`。替换 `edit_runner`／`aut_runner`／`evaluator`（测试用）只在 `--jobs 1` 下可用。
 
 ## 输出
