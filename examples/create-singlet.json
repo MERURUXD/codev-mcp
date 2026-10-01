@@ -1,0 +1,37 @@
+{
+  "units": "mm",
+  "aperture_kind": "epd",
+  "aperture_value": 8,
+  "wavelengths_nm": [
+    650,
+    550,
+    450
+  ],
+  "fields": [
+    {
+      "x_angle": 0,
+      "y_angle": 0
+    },
+    {
+      "x_angle": 0,
+      "y_angle": 3
+    },
+    {
+      "x_angle": 0,
+      "y_angle": 6
+    }
+  ],
+  "surfaces": [
+    {
+      "radius": 45,
+      "thickness": 4,
+      "glass": "BK7_SCHOTT"
+    },
+    {
+      "radius": -45,
+      "thickness": 40
+    }
+  ],
+  "stop_surface": 1,
+  "image_solve": "pim"
+}

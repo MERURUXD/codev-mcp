@@ -1,0 +1,61 @@
+{
+  "schema_version": 1,
+  "kind": "design_spec",
+  "name": "dbgauss-efl50-workflow-demonstration",
+  "description": "End-to-end demonstration on the synthetic test model dbgauss scaled to a 50 mm focal length. Every threshold is a demonstration value, not a design requirement.",
+  "demonstration": true,
+  "units": "mm",
+  "system": {
+    "aperture": {"kind": "epd", "value": 24.9998782028, "source": "dbgauss EPD 50 scaled with the lens to EFL 50"},
+    "fields": {
+      "values": [
+        {"x_angle": 0, "y_angle": 0, "weight": 1},
+        {"x_angle": 0, "y_angle": 10, "weight": 1},
+        {"x_angle": 0, "y_angle": 14, "weight": 1}
+      ],
+      "source": "hand-authored demonstration condition"
+    },
+    "wavelengths": {
+      "values": [{"nm": 656.3, "weight": 1}, {"nm": 587.6, "weight": 1}, {"nm": 486.1, "weight": 1}],
+      "reference": 2,
+      "source": "hand-authored demonstration condition"
+    },
+    "glass_catalogs": {"allowed": ["SCHOTT", "OHARA", "CDGM"], "source": "demonstration value"}
+  },
+  "evaluation": {
+    "analyses": ["first_order", "spot_diagram", "mtf", "wavefront", "native_plot"],
+    "mtf_frequencies": [0, 10, 20, 30, 40, 50],
+    "spot_grid": 7
+  },
+  "criteria": [
+    {"preset": "marechal", "required": false, "source": "demonstration: informative only"},
+    {"preset": "airy_spot", "statistic": "rms", "required": false, "source": "demonstration: informative only"}
+  ],
+  "requirements": [
+    {"id": "efl", "metric": "effective_focal_length", "unit": "mm", "field": null, "direction": null,
+     "frequency": null, "minimum": 49.95, "maximum": 50.05, "required": true, "source": "demonstration value"},
+    {"id": "f-number", "metric": "f_number", "unit": "ratio", "field": null, "direction": null,
+     "frequency": null, "minimum": 1.95, "maximum": 2.05, "required": true, "source": "demonstration value"},
+    {"id": "oal", "metric": "overall_length", "unit": "mm", "field": null, "direction": null,
+     "frequency": null, "minimum": null, "maximum": 40, "required": true, "source": "demonstration value"},
+    {"id": "bfl", "metric": "back_focal_length", "unit": "mm", "field": null, "direction": null,
+     "frequency": null, "minimum": 25, "maximum": null, "required": true, "source": "demonstration value"},
+    {"id": "glass-center-min", "metric": "center_thickness_min", "unit": "mm", "field": null, "direction": null,
+     "frequency": null, "minimum": 1, "maximum": null, "required": true, "source": "demonstration value"},
+    {"id": "glass-center-max", "metric": "center_thickness_max", "unit": "mm", "field": null, "direction": null,
+     "frequency": null, "minimum": null, "maximum": 8, "required": true, "source": "demonstration value"},
+    {"id": "air-center-min", "metric": "air_center_thickness_min", "unit": "mm", "field": null, "direction": null,
+     "frequency": null, "minimum": 0.05, "maximum": null, "required": true, "source": "demonstration value"},
+    {"id": "air-edge-min", "metric": "air_edge_thickness_min", "unit": "mm", "field": null, "direction": null,
+     "frequency": null, "minimum": 0.25, "maximum": null, "required": true, "source": "demonstration value"},
+    {"id": "distortion", "metric": "distortion_max_abs", "unit": "percent", "field": null, "direction": null,
+     "frequency": null, "minimum": null, "maximum": 1, "required": true, "source": "demonstration value"},
+    {"id": "mtf-axis-20", "metric": "mtf", "unit": "ratio", "field": 1, "direction": "tangential",
+     "frequency": 20, "minimum": 0.2, "maximum": null, "required": true, "source": "demonstration value"},
+    {"id": "spot-axis-rms", "metric": "spot_rms_radius", "unit": "mm", "field": 1, "direction": null,
+     "frequency": null, "minimum": null, "maximum": 0.03, "required": true, "source": "demonstration value"},
+    {"id": "glass-edge-min", "metric": "edge_thickness_min", "unit": "mm", "field": null, "direction": null,
+     "frequency": null, "minimum": 0.5, "maximum": null, "required": false,
+     "source": "demonstration value; informative because dbgauss surface 5 is steeper than the cemented face's aperture"}
+  ]
+}

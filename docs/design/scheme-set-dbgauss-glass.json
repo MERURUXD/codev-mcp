@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "kind": "scheme_set",
+  "name": "dbgauss-glass-schemes-demo",
+  "description": "Demonstration of scheme comparison on the synthetic test model dbgauss: the sample's own SCHOTT glasses, the nearest CDGM glasses and the nearest HOYA glasses (from the D8 candidate lists), each optimized with the same one-stage AUT spec; a fourth scheme changes the vignetting factors, whose error function values cannot be compared directly with the others. All values are demonstration values.",
+  "schemes": [
+    {"name": "schott", "reason": "the sample's own glasses (baseline)"},
+    {"name": "cdgm", "reason": "nearest CDGM glasses for F15 and SK16",
+     "edits": [
+       {"target": "surface", "surface": 4, "parameter": "glass", "value": "HF1_CDGM"},
+       {"target": "surface", "surface": 7, "parameter": "glass", "value": "HF1_CDGM"},
+       {"target": "surface", "surface": 8, "parameter": "glass", "value": "HZK9A_CDGM"},
+       {"target": "surface", "surface": 10, "parameter": "glass", "value": "HZK9A_CDGM"}]},
+    {"name": "hoya", "reason": "nearest HOYA glasses for F15 and SK16",
+     "edits": [
+       {"target": "surface", "surface": 4, "parameter": "glass", "value": "F15_HOYA"},
+       {"target": "surface", "surface": 7, "parameter": "glass", "value": "F15_HOYA"},
+       {"target": "surface", "surface": 8, "parameter": "glass", "value": "BACD16_HOYA"},
+       {"target": "surface", "surface": 10, "parameter": "glass", "value": "BACD16_HOYA"}]},
+    {"name": "vignetted", "reason": "sample glasses with more vignetting at fields 2 and 3",
+     "field_set": {"fields": [{"y_angle": 0}, {"y_angle": 10, "vuy": 0.3, "vly": 0.4}, {"y_angle": 14, "vuy": 0.5, "vly": 0.5}]}}
+  ]
+}

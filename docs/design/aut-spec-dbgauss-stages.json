@@ -1,0 +1,68 @@
+{
+  "schema_version": 1,
+  "kind": "aut_spec",
+  "name": "dbgauss-three-stage-demo",
+  "description": "Demonstration of staged optimization on the synthetic test model dbgauss: monochromatic (d line only), then all wavelengths with thickness freedom and constraints, then a polish with a finer improvement threshold. All values are demonstration values.",
+  "wall_seconds": 900,
+  "stages": [
+    {
+      "name": "mono",
+      "lens_changes": [
+        {"target": "wavelength", "wavelength": 1, "parameter": "weight", "value": 0},
+        {"target": "wavelength", "wavelength": 3, "parameter": "weight", "value": 0}
+      ],
+      "variables": [
+        {"surface": 1, "parameter": "radius"}, {"surface": 2, "parameter": "radius"},
+        {"surface": 3, "parameter": "radius"}, {"surface": 5, "parameter": "radius"},
+        {"surface": 7, "parameter": "radius"}, {"surface": 9, "parameter": "radius"},
+        {"surface": 10, "parameter": "radius"}, {"surface": 11, "parameter": "radius"}
+      ],
+      "constraints": [{"operand": "EFL", "relation": "=", "value": 100, "tolerance": 0.001}],
+      "error_function": {"MXC": 20, "MNC": 1, "TAR": 0}
+    },
+    {
+      "name": "poly",
+      "lens_changes": [
+        {"target": "wavelength", "wavelength": 1, "parameter": "weight", "value": 1},
+        {"target": "wavelength", "wavelength": 3, "parameter": "weight", "value": 1}
+      ],
+      "variables": [
+        {"surface": 1, "parameter": "radius"}, {"surface": 2, "parameter": "radius"},
+        {"surface": 3, "parameter": "radius"}, {"surface": 5, "parameter": "radius"},
+        {"surface": 7, "parameter": "radius"}, {"surface": 9, "parameter": "radius"},
+        {"surface": 10, "parameter": "radius"}, {"surface": 11, "parameter": "radius"},
+        {"surface": 2, "parameter": "thickness", "lower": 0.1, "upper": 5},
+        {"surface": 5, "parameter": "thickness", "lower": 5},
+        {"surface": 6, "parameter": "thickness", "lower": 5},
+        {"surface": 9, "parameter": "thickness", "lower": 0.1, "upper": 5}
+      ],
+      "constraints": [
+        {"operand": "EFL", "relation": "=", "value": 100, "tolerance": 0.001},
+        {"operand": "OAL", "relation": "<", "value": 80},
+        {"operand": "IMD", "relation": ">", "value": 50}
+      ],
+      "general_constraints": {"MNT": 2, "MNE": 1},
+      "error_function": {"MXC": 30, "MNC": 1, "TAR": 0}
+    },
+    {
+      "name": "polish",
+      "variables": [
+        {"surface": 1, "parameter": "radius"}, {"surface": 2, "parameter": "radius"},
+        {"surface": 3, "parameter": "radius"}, {"surface": 5, "parameter": "radius"},
+        {"surface": 7, "parameter": "radius"}, {"surface": 9, "parameter": "radius"},
+        {"surface": 10, "parameter": "radius"}, {"surface": 11, "parameter": "radius"},
+        {"surface": 2, "parameter": "thickness", "lower": 0.1, "upper": 5},
+        {"surface": 5, "parameter": "thickness", "lower": 5},
+        {"surface": 6, "parameter": "thickness", "lower": 5},
+        {"surface": 9, "parameter": "thickness", "lower": 0.1, "upper": 5}
+      ],
+      "constraints": [
+        {"operand": "EFL", "relation": "=", "value": 100, "tolerance": 0.001},
+        {"operand": "OAL", "relation": "<", "value": 80},
+        {"operand": "IMD", "relation": ">", "value": 50}
+      ],
+      "general_constraints": {"MNT": 2, "MNE": 1},
+      "error_function": {"MXC": 60, "MNC": 5, "TAR": 0, "IMP": 0.001}
+    }
+  ]
+}

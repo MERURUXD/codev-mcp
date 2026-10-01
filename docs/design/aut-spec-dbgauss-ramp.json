@@ -1,0 +1,31 @@
+{
+  "schema_version": 1,
+  "kind": "aut_spec",
+  "name": "dbgauss-field-ramp-demo",
+  "description": "Demonstration of a field ramp on the synthetic test model dbgauss whose fields were first reduced to 0/4/6 degrees (python -m codev_mcp.edit with a field_set): three steps raise fields 2 and 3 to 6/9, 8/12 and 10/14 degrees, each step optimizing from the previous step's candidate. Field 3 gets weight 2 while the fields grow and is restored to 1 in the last step. The lower bound of the S2 air space equals its starting value on purpose: CODE V accepts a start on a bound and moves the variable into the bounds. All values are demonstration values.",
+  "wall_seconds": 900,
+  "field_ramp": {
+    "name": "grow",
+    "steps": [
+      {"fields": [{"field": 2, "y_angle": 6}, {"field": 3, "y_angle": 9, "weight": 2}]},
+      {"fields": [{"field": 2, "y_angle": 8}, {"field": 3, "y_angle": 12}]},
+      {"fields": [{"field": 2, "y_angle": 10}, {"field": 3, "y_angle": 14, "weight": 1}]}
+    ],
+    "stage": {
+      "variables": [
+        {"surface": 1, "parameter": "radius"}, {"surface": 2, "parameter": "radius"},
+        {"surface": 3, "parameter": "radius"}, {"surface": 5, "parameter": "radius"},
+        {"surface": 7, "parameter": "radius"}, {"surface": 9, "parameter": "radius"},
+        {"surface": 10, "parameter": "radius"}, {"surface": 11, "parameter": "radius"},
+        {"surface": 2, "parameter": "thickness", "lower": 0.298181517619, "upper": 5},
+        {"surface": 9, "parameter": "thickness", "lower": 0.1, "upper": 5}
+      ],
+      "constraints": [
+        {"operand": "EFL", "relation": "=", "value": 100, "tolerance": 0.001},
+        {"operand": "IMD", "relation": ">", "value": 50}
+      ],
+      "general_constraints": {"MNT": 2, "MNE": 1},
+      "error_function": {"MXC": 15, "MNC": 1, "TAR": 0}
+    }
+  }
+}

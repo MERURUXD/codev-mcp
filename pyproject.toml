@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "codev-mcp"
+version = "0.1.0"
+description = "通过 COM 接口把本机 CODE V 10.2 接入 MCP 客户端"
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+requires-python = ">=3.10"
+dependencies = [
+    "mcp>=1.2,<2",
+    "pydantic>=2.5,<3",
+    "pywin32>=306; sys_platform == 'win32'",
+    # psutil backs the CODE V process watchdog in com_session.py: the engine
+    # liveness check, the recorded-process cleanup and the StopCodeV
+    # verification all degrade silently without it.
+    "psutil>=5.9; sys_platform == 'win32'",
+]
+[project.optional-dependencies]
+dev = ["pytest>=7"]
+
+[project.scripts]
+codev-mcp = "codev_mcp.__main__:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]

@@ -1,0 +1,26 @@
+{
+  "schema_version": 1,
+  "kind": "aut_spec",
+  "name": "wideang-field-ramp-demo",
+  "description": "Field ramp on the synthetic test model wideang (semi-field 36 degrees, no vignetting) whose fields were first reduced to 0/12.6/18 degrees: two steps raise fields 2 and 3 to 20/28 and 25.2/36 degrees, each step optimizing from the previous step's candidate. All values are demonstration values; the point is the mechanism, not the design.",
+  "wall_seconds": 900,
+  "field_ramp": {
+    "name": "grow",
+    "steps": [
+      {"fields": [{"field": 2, "y_angle": 20}, {"field": 3, "y_angle": 28}]},
+      {"fields": [{"field": 2, "y_angle": 25.2}, {"field": 3, "y_angle": 36}]}
+    ],
+    "stage": {
+      "variables": [
+        {"surface": 1, "parameter": "radius"}, {"surface": 3, "parameter": "radius"},
+        {"surface": 5, "parameter": "radius"}, {"surface": 7, "parameter": "radius"},
+        {"surface": 10, "parameter": "radius"}, {"surface": 12, "parameter": "radius"}
+      ],
+      "constraints": [
+        {"operand": "IMD", "relation": ">", "value": 60}
+      ],
+      "general_constraints": {"MNT": 1, "MNE": 0.5},
+      "error_function": {"MXC": 12, "MNC": 1, "TAR": 0}
+    }
+  }
+}

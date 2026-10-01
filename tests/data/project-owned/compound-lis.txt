@@ -1,0 +1,54 @@
+     Synthetic compound parser lens
+                RDY             THI     RMD       GLA           CCY   THC   GLC
+> OBJ:        INFINITY        INFINITY                          100   100
+    1:        64.12345        9.123456       BSM24_OHARA          0   100
+    2:       170.76543        0.456789                            0     0
+    3:        48.12345       11.234560       SK1_SCHOTT           0   100
+    4:        INFINITY        4.654321       F15_SCHOTT         100   100
+    5:        31.87654       13.765432                            0     0
+  STO:        INFINITY       10.345678                          100     0
+    7:       -36.12345        4.654321       F15_SCHOTT           0   100
+    8:        INFINITY        9.876543       SK16_SCHOTT        100   100
+    9:       -47.56789        0.456789                            0     0
+   10:       510.12345        7.345678       SK16_SCHOTT          0   100
+   11:       -70.45678       61.234567                            0   PIM
+  IMG:        INFINITY        0.000000                          100     0
+
+ SPECIFICATION DATA
+    EPD       50.00000
+    DIM             MM
+    WL          656.30    587.60    486.10
+    REF              2
+    WTW              1         1         1
+    XAN        0.00000       0.00000       0.00000
+    YAN        0.00000      10.00000      14.00000
+    WTF        1.00000       1.00000       1.00000
+    VUY        0.00000       0.20000       0.40000
+    VLY        0.00000       0.30000       0.40000
+    POL            N
+
+ REFRACTIVE INDICES
+     GLASS CODE                    656.30       587.60       486.10
+
+ SOLVES
+    PIM
+
+ No pickups defined in system
+
+ INFINITE CONJUGATES
+    EFL       100.0001
+    BFL        61.2346
+    FFL       -29.1234
+    FNO         2.0000
+    IMG DIS    61.2346
+    OAL        81.9134
+    PARAXIAL IMAGE
+     HT        23.4567
+    ANG        14.0000
+    ENTRANCE PUPIL
+     DIA       50.0000
+     THI       53.1234
+    EXIT PUPIL
+     DIA       56.1234
+     THI      -49.1234
+Command End:

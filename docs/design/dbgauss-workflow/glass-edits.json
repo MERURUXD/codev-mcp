@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "kind": "lens_edits",
+  "name": "dbgauss-schott-to-cdgm",
+  "reason": "Demonstration: replace SK16_SCHOTT and F15_SCHOTT by the nearest CDGM glasses listed by codev_mcp.glass_near (HZK9A: same 620603 code; HF1: delta nd -0.0022, delta vd +0.17), then re-optimize.",
+  "edits": [
+    {"target": "surface", "surface": 4, "parameter": "glass", "value": "HF1_CDGM"},
+    {"target": "surface", "surface": 7, "parameter": "glass", "value": "HF1_CDGM"},
+    {"target": "surface", "surface": 8, "parameter": "glass", "value": "HZK9A_CDGM"},
+    {"target": "surface", "surface": 10, "parameter": "glass", "value": "HZK9A_CDGM"}
+  ]
+}

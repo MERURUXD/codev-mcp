@@ -1,0 +1,10 @@
+! SYNTHETIC hand-authored frozen/general constraint tail, 2026-10-01.
+CYCLE NUMBER 300:
+ ERR. F. = 40.12345678
+ Active Constraints - 2: target value diff cost
+ EFL                    =   1.00000E+02   1.00000E+02   0.000E+00   0.000E+00
+ Mn CT S2                                                           2.000E-42
+ WARNING - Frozen Thickness Violations:
+ Mn ET S1        Mn ET S3
+ Normal AUTO Completion - Maximum cycle limit reached
+Command End:

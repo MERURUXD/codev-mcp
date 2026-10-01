@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "kind": "aut_spec",
+  "name": "dbgauss-multivariable-demo",
+  "description": "Demonstration: eight curvatures and four air spaces of the synthetic test model dbgauss with focal length, length and image-distance constraints. All values are demonstration values.",
+  "wall_seconds": 600,
+  "stages": [
+    {
+      "name": "constrained",
+      "variables": [
+        {"surface": 1, "parameter": "radius"},
+        {"surface": 2, "parameter": "radius"},
+        {"surface": 3, "parameter": "radius"},
+        {"surface": 5, "parameter": "radius"},
+        {"surface": 7, "parameter": "radius"},
+        {"surface": 9, "parameter": "radius"},
+        {"surface": 10, "parameter": "radius"},
+        {"surface": 11, "parameter": "radius"},
+        {"surface": 2, "parameter": "thickness", "lower": 0.1, "upper": 5},
+        {"surface": 5, "parameter": "thickness", "lower": 5},
+        {"surface": 6, "parameter": "thickness", "lower": 5},
+        {"surface": 9, "parameter": "thickness", "lower": 0.1, "upper": 5}
+      ],
+      "constraints": [
+        {"operand": "EFL", "relation": "=", "value": 100, "source": "demonstration value"},
+        {"operand": "OAL", "relation": "<", "value": 80, "source": "demonstration value"},
+        {"operand": "IMD", "relation": ">", "value": 50, "source": "demonstration value"}
+      ],
+      "general_constraints": {"MNT": 2, "MNE": 1},
+      "error_function": {"MXC": 30, "MNC": 1, "TAR": 0}
+    }
+  ]
+}

@@ -1,0 +1,46 @@
+                RDY             THI     RMD       GLA           CCY   THC   GLC
+> OBJ:        INFINITY        INFINITY                          100   100
+  STO:        45.00000        4.000000       BK7_SCHOTT         100   100
+    2:       -45.00000       42.723850                          100   PIM
+  IMG:        INFINITY        0.000000                          100   100
+
+SPECIFICATION DATA
+   EPD        8.00000
+   DIM             MM
+   WL          650.00    550.00    450.00
+   REF              2
+   WTW              1         1         1
+   XAN        0.00000       0.00000       0.00000
+   YAN        0.00000       3.00000       6.00000
+   WTF        1.00000       1.00000       1.00000
+   VUY        0.00000       0.00000       0.00000
+   VLY        0.00000       0.00000       0.00000
+   POL            N
+
+REFRACTIVE INDICES
+    GLASS CODE                    650.00       550.00       450.00
+   BK7_SCHOTT                   1.514520     1.518522     1.525320
+
+SOLVES
+   PIM
+
+No pickups defined in system
+
+
+INFINITE CONJUGATES
+   EFL        44.0612
+   BFL        42.7239
+   FFL       -42.7239
+   FNO         5.5077
+   IMG DIS    42.7239
+   OAL         4.0000
+   PARAXIAL IMAGE
+    HT         4.6310
+   ANG         6.0000
+   ENTRANCE PUPIL
+    DIA        8.0000
+    THI        0.0000
+   EXIT PUPIL
+    DIA        8.2504
+    THI       -2.7166
+Command End:

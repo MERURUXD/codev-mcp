@@ -1,0 +1,33 @@
+    WAV                                                                              01-Oct-26   1H 19M 19S
+                                                CODE V PC  Version: 10.2 SR1         CPU clock:  0H  0M 19S
+
+
+                                 W A V E F R O N T   A N A L Y S I S
+
+------------------------------------------------------------------------------------------------------------
+
+                                                                                              POSITION 1
+
+                         X REL. FIELD    0.00    0.00    0.00
+                         Y REL. FIELD    0.00    0.50    1.00
+                              WEIGHTS    1.00    1.00    1.00
+                       NUMBER OF RAYS     948     936     930
+
+                          WAVELENGTHS   650.0   550.0   450.0
+                              WEIGHTS       1       1       1
+
+  FIELD                   RMS         SHIFT         STREHL
+      FRACT    DEG      (WAVES)      (MM.)
+
+  X   0.00    0.00                  0.000000
+  Y   0.00    0.00     1.660776     0.000000       0.000000
+
+  X   0.00    0.00                  0.000000
+  Y   0.50    3.00     1.969828     0.006707       0.000000
+
+  X   0.00    0.00                  0.000000
+  Y   1.00    6.00     3.061039     0.013373       0.000000
+
+    WEIGHTED RMS       2.305742                    0.000000
+       (WAVES)
+Command End:

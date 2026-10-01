@@ -1,0 +1,21 @@
+include LICENSE README.md README.en.md CONTRIBUTING.md requirements.lock.txt
+recursive-include src/codev_mcp *.py
+include docs/README.md docs/install.md docs/capabilities.md
+include docs/comparison-workflow.md docs/controlled-aut.md docs/batch-workflow.md
+include docs/parameter-scan.md docs/performance-workflow.md docs/scheme-comparison.md
+include docs/deliverable.md docs/field-set-and-seq-import.md docs/glass-catalog.md
+include docs/design/design-spec.md docs/design/execution-record.md
+recursive-include docs/design *.json
+recursive-include examples *.md *.json *.py
+recursive-include tests *.py *.md *.txt *.seq
+prune docs/evidence
+prune docs/reports
+prune docs/references
+prune tasks
+prune scripts
+exclude AGENTS.md CLAUDE.md docs/publishing.md docs/documentation-checks.md
+exclude tests/test_verify_performance_comparison.py
+exclude tests/test_verify_lens_recovery.py
+exclude tests/data/cooke1.seq tests/data/dbgauss.seq tests/data/wideang.seq
+exclude tests/data/fie_dbgauss.txt tests/data/lis_dbgauss.txt tests/data/spot_dbgauss.txt tests/data/wavefront_nominal_dbgauss.txt
+global-exclude __pycache__ *.py[cod]

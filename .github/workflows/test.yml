@@ -1,0 +1,45 @@
+name: Windows package and license-free tests
+on: [push, pull_request, workflow_dispatch]
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ['3.10', '3.13']
+        dependencies: [locked, declared]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - run: python -m pip install --upgrade pip
+      - if: matrix.dependencies == 'locked'
+        run: |
+          python -m pip install -r requirements.lock.txt
+          python -m pip install --no-deps .
+      - if: matrix.dependencies == 'declared'
+        run: python -m pip install .
+      - run: python -m pip check
+      - name: Test the installed package without source imports
+        env:
+          CODEV_MCP_TEST_INSTALLED: '1'
+        run: |
+          $env:CODEV_MCP_TEST_TMPROOT = Join-Path $env:RUNNER_TEMP 'cvtests'
+          python -m unittest discover -s tests -t .
+      - run: python examples/simulated_quickstart.py --output ${{ runner.temp }}/codev-demo
+  package:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - run: python -m pip install build
+      - run: python -m build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: experimental-0.1.0-packages
+          path: dist/*

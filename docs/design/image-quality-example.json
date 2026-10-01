@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "analysis": {
+    "kinds": ["first_order", "mtf", "spot_diagram"],
+    "fields": [1, 5],
+    "frequencies": [0, 10, 20, 30],
+    "spot_grid": 7
+  },
+  "requirements": [],
+  "export_indices": []
+}
