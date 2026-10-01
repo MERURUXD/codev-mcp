@@ -2,7 +2,7 @@
 
 The scheme's ``reason`` says what to do: ``sleep:<seconds>`` (optionally followed by ``,fail``, ``,doubt``,
 ``,crash``, ``,hang`` or ``,barrier:a+b`` to wait for named workers to start).
-Start and end lines go to ``worker-log.txt`` beside the scheme directories, so a
+Start and end lines go to a separate event file for each worker, so a
 test can see how many workers overlapped. No CODE V is involved.
 """
 from __future__ import annotations
@@ -18,8 +18,11 @@ from publication_fixtures import aut_report
 
 
 def log(request: dict, text: str) -> None:
-    with (Path(request["directory"]).parent / "worker-log.txt").open("a", encoding="utf-8") as handle:
-        handle.write(f"{time.monotonic():.3f} {text}\n")
+    # Each file has one writer: concurrent append to a shared file can lose
+    # events on Windows and make an otherwise correct schedule look wrong.
+    path = Path(request["result_path"]).with_name(f"{request['scheme']['name']}-events.txt")
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(f"{time.monotonic_ns()} {text}\n")
 
 
 def main() -> int:

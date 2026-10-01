@@ -433,9 +433,14 @@ class RunTests(unittest.TestCase):
     def overlap(directory) -> int:
         """The most workers that were alive at the same time, from the workers' own start/end lines."""
         events = []
-        for line in (Path(directory) / "worker-log.txt").read_text(encoding="utf-8").splitlines():
-            stamp, kind, _ = line.split()
-            events.append((float(stamp), 1 if kind == "start" else -1))
+        for path in (Path(directory) / "_workers").glob("*-events.txt"):
+            kinds = []
+            for line in path.read_text(encoding="utf-8").splitlines():
+                stamp, kind, _ = line.split()
+                kinds.append(kind)
+                events.append((int(stamp), 1 if kind == "start" else -1))
+            if kinds != ["start", "end"]:
+                raise AssertionError(f"Incomplete worker events: {path}: {kinds}")
         alive = peak = 0
         for _, step in sorted(events):
             alive += step
@@ -443,7 +448,8 @@ class RunTests(unittest.TestCase):
         return peak
 
     def test_jobs_run_that_many_schemes_at_once_and_keep_the_scheme_order(self):
-        items = [{"name": n, "reason": "sleep:2.0"} for n in "abcd"]
+        items = [{"name": n, "reason": f"sleep:2.0,barrier:{'a+b' if n in 'ab' else 'c+d'}"}
+                 for n in "abcd"]
         directory, manifest = self.parallel(2, *items)
         self.assertEqual(manifest["status"], "succeeded")
         self.assertEqual(manifest["jobs"], 2)
