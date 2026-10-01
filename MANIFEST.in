@@ -7,15 +7,7 @@ include docs/deliverable.md docs/field-set-and-seq-import.md docs/glass-catalog.
 include docs/design/design-spec.md docs/design/execution-record.md
 recursive-include docs/design *.json
 recursive-include examples *.md *.json *.py
-recursive-include tests *.py *.md *.txt *.seq
-prune docs/evidence
-prune docs/reports
-prune docs/references
-prune tasks
-prune scripts
-exclude AGENTS.md CLAUDE.md docs/publishing.md docs/documentation-checks.md
-exclude tests/test_verify_performance_comparison.py
-exclude tests/test_verify_lens_recovery.py
-exclude tests/data/cooke1.seq tests/data/dbgauss.seq tests/data/wideang.seq
-exclude tests/data/fie_dbgauss.txt tests/data/lis_dbgauss.txt tests/data/spot_dbgauss.txt tests/data/wavefront_nominal_dbgauss.txt
+include tests/*.py tests/data/walkthrough-snapshot.md
+recursive-include tests/data/project-owned *.md *.txt *.seq
+exclude tests/test_verify_*.py
 global-exclude __pycache__ *.py[cod]

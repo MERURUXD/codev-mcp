@@ -2,7 +2,7 @@
   "schema_version": 1,
   "kind": "aut_spec",
   "name": "dbgauss-field-ramp-demo",
-  "description": "Demonstration of a field ramp on the synthetic test model dbgauss whose fields were first reduced to 0/4/6 degrees (python -m codev_mcp.edit with a field_set): three steps raise fields 2 and 3 to 6/9, 8/12 and 10/14 degrees, each step optimizing from the previous step's candidate. Field 3 gets weight 2 while the fields grow and is restored to 1 in the last step. The lower bound of the S2 air space equals its starting value on purpose: CODE V accepts a start on a bound and moves the variable into the bounds. All values are demonstration values.",
+  "description": "Demonstration of a field ramp for an 11-surface double Gauss laid out like the simulated backend's dbgauss model (stop on surface 6, F15 on surfaces 4 and 7, SK16 on 8 and 10) whose fields were first reduced to 0/4/6 degrees (python -m codev_mcp.edit with a field_set): three steps raise fields 2 and 3 to 6/9, 8/12 and 10/14 degrees, each step optimizing from the previous step's candidate. Field 3 gets weight 2 while the fields grow and is restored to 1 in the last step. The lower bound of the S2 air space equals its starting value on purpose: CODE V accepts a start on a bound and moves the variable into the bounds. All values are demonstration values. AUT runs only with the real backend: use your own lens with the same surface layout and adapt surface numbers and values.",
   "wall_seconds": 900,
   "field_ramp": {
     "name": "grow",

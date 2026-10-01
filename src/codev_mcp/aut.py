@@ -185,7 +185,7 @@ def start_bounds(snapshot: LensSnapshot, stage: dict) -> list[dict[str, Any]]:
     """Variables that start on or outside a bound.
 
     CODE V accepts them without an error and moves the variable to the bound
-    (E5 probe, ``local validation records``), so this is
+    (verified on a real machine), so this is
     a note in the stage record, not a refusal.
     """
     surfaces = {surface.number: surface for surface in snapshot.zooms[0].surfaces}

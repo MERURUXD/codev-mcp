@@ -218,7 +218,7 @@ def pupil_fractions(wavefront: dict) -> list[float] | None:
 
     CODE V's WAV grid is fixed in exit space; the stop and default apertures block the part of it
     that an off-axis beam cannot pass, and those rays are neither failures nor part of the RMS
-    (local validation records). None if the counts are missing or field 1 has none.
+    None if the counts are missing or field 1 has none.
     """
     counts = [field.get("rays_traced") for field in wavefront.get("fields") or []]
     if not counts or any(isinstance(n, bool) or not isinstance(n, int) or n <= 0 for n in counts):

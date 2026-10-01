@@ -1,7 +1,7 @@
 """Real CODE V backend: lens read, parameter edit and save as.
 
 Calling conventions come from the Phase A report and from the three Phase C
-probes (local validation records). The behaviours that shaped this code:
+probes. The behaviours that shaped this code:
 
 * values are read with Macro-PLUS database items through EvaluateExpression,
   which is fast but silently echoes the previous result when an item name is
@@ -15,7 +15,7 @@ probes (local validation records). The behaviours that shaped this code:
   the value back and the whole batch is rolled back when a read back differs;
 * the restore point is a lens file written with SAV and read back with RES.
 
-Since the lens recovery design (local validation records) every successful
+Since the lens recovery design every successful
 batch is also published as a checkpoint: the lens file is written to its own
 revision file, restored, compared element by element against the verified
 state, and only then pointed at by current.json. That is what an engine exit
@@ -179,8 +179,7 @@ WAVELENGTH_ITEM = {"micrometers": "WL", "weight": "WTW", "is_reference": "REF"}
 NO_ZOOM_QUALIFIER = {"glass", "micrometers", "weight", "is_reference"}
 
 #: Set once the Phase D acceptance script has produced real machine evidence:
-#: the first order, spot diagram and MTF sections passed on 2026-09-17
-#: on CODE V 10.2. Detailed records are retained locally.
+#: the first order, spot diagram and MTF sections passed on CODE V 10.2.
 ANALYSES_VERIFIED = True
 
 #: Set only once the Phase H acceptance script has exported all five native
@@ -188,7 +187,7 @@ ANALYSES_VERIFIED = True
 #: the export is new code with its own failure modes, and the Phase D evidence
 #: covers the analytic results, not a plot file CODE V converted for us.
 NATIVE_PLOT_VERIFIED = True
-#: Nominal WAV passed the 2026-09-26 two-run real MCP comparison acceptance.
+#: Nominal WAV passed a two-run real MCP comparison acceptance.
 #: The separate W1 probe confirmed the exact command and no observable lens edit.
 WAVEFRONT_VERIFIED = True
 
@@ -1824,7 +1823,7 @@ class ComBackend(Backend):
                 )
             )
         if zoom == 1 and not listing_truncated:
-            # SPECIFICATION DATA prints zoom position 1 (probe 2026-09-28, orapho21);
+            # SPECIFICATION DATA prints zoom position 1 (checked on a multi-zoom lens);
             # the other positions are covered by the zoom-qualified items only.
             warnings.extend(
                 "vignetting cross check: " + problem

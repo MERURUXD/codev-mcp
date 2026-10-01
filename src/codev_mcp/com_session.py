@@ -1,7 +1,7 @@
 """Thin wrapper around the CODE V COM object.
 
-The calling conventions here are the ones verified in Phase A
-(local validation records): activate the versioned ProgID, set the command timeout
+The calling conventions here are the ones verified in Phase A:
+activate the versioned ProgID, set the command timeout
 in milliseconds, configure the working directory before StartCodeV, and treat
 StopCodeV as potentially slow.
 
@@ -38,8 +38,8 @@ STARTUP_TIMEOUT_MS = 120000
 RECOVERY_FILE_PATTERNS = ("codev.rec", "codev*.rec")
 
 #: A windowless engine that crashed stays in the process table with no threads
-#: while an application error dialog waits for a click. Verified on 2026-09-16
-#: and 2026-09-17: those sessions never answer a command again, and killing the
+#: while an application error dialog waits for a click. Verified on real
+#: machines: those sessions never answer a command again, and killing the
 #: engine also dismisses the dialog, so the watchdog treats a threadless engine
 #: as dead instead of waiting for the startup timeout.
 WATCHDOG_POLL_SECONDS = 0.5

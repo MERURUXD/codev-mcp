@@ -2,8 +2,8 @@
 
 ``resolve_field_set`` and ``field_set_commands`` are shared by the real and the
 simulated backend, so both apply the same rules. CODE V keeps weights and
-vignetting factors by field number when the field count changes (probe
-``local validation records``): a shorter set drops the
+vignetting factors by field number when the field count changes (verified
+on a real machine): a shorter set drops the
 tail, a longer set starts its new fields at weight 1 and factors 0.
 
 The calculation half is a small command line tool that turns "maximum field

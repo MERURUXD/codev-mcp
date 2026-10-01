@@ -2,7 +2,7 @@
   "schema_version": 1,
   "kind": "aut_spec",
   "name": "wideang-field-ramp-demo",
-  "description": "Field ramp on the synthetic test model wideang (semi-field 36 degrees, no vignetting) whose fields were first reduced to 0/12.6/18 degrees: two steps raise fields 2 and 3 to 20/28 and 25.2/36 degrees, each step optimizing from the previous step's candidate. All values are demonstration values; the point is the mechanism, not the design.",
+  "description": "Field ramp for a user-supplied wide-angle lens (semi-field 36 degrees, no vignetting, at least 12 surfaces) whose fields were first reduced to 0/12.6/18 degrees: two steps raise fields 2 and 3 to 20/28 and 25.2/36 degrees, each step optimizing from the previous step's candidate. All values are demonstration values; the point is the mechanism, not the design. AUT runs only with the real backend: adapt surface numbers and values to your own lens.",
   "wall_seconds": 900,
   "field_ramp": {
     "name": "grow",

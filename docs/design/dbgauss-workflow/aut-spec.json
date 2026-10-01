@@ -2,7 +2,7 @@
   "schema_version": 1,
   "kind": "aut_spec",
   "name": "dbgauss-efl50-three-stage-demo",
-  "description": "Demonstration: three-stage re-optimization of the EFL 50 dbgauss after the CDGM glass swap (monochromatic, all wavelengths with thickness freedom, polish). All values are demonstration values.",
+  "description": "Demonstration: three-stage re-optimization of an 11-surface double Gauss laid out like the simulated backend's dbgauss model (stop on surface 6, F15 on surfaces 4 and 7, SK16 on 8 and 10), scaled to a 50 mm focal length, after the CDGM glass swap in glass-edits.json (monochromatic, all wavelengths with thickness freedom, polish). All values are demonstration values. AUT runs only with the real backend: use your own lens with the same surface layout and adapt surface numbers and values.",
   "wall_seconds": 900,
   "stages": [
     {

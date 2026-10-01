@@ -7,8 +7,7 @@ The PIM image distance is left to CODE V and reported as a solve-coupled
 change. The result is saved through ``save_lens_as``, reopened in a separate
 session and checked again; the input file is never written.
 
-The native ``SCA EFL SPC`` command was probed against this path (see
-local validation records); the typed transaction is kept because it
+The native ``SCA EFL SPC`` command was probed against this path; the typed transaction is kept because it
 reuses the existing rollback and readback guarantees and records every
 command it sent.
 """

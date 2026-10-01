@@ -40,11 +40,9 @@ python -m venv .venv
 | 查找其他 CLI、规格示例与模拟入门 | [文档索引](docs/README.md) |
 | 修改代码、运行测试或维护文档 | [开发与验证](CONTRIBUTING.md) |
 
-
-
 ## 可复现示例
 
-安装后执行 `python examples/simulated_quickstart.py --output .codev-run/demo`。它从空会话创建模拟球面镜头，经 MCP 获取一阶结果并另存，输出与限制见[模拟入门](examples/README.md)。
+安装后在仓库根目录执行 `.\.venv\Scripts\python.exe examples/simulated_quickstart.py --output .codev-run/demo`。它从空会话创建模拟球面镜头，经 MCP 获取一阶结果并另存，输出与限制见[模拟入门](examples/README.md)。
 
 ## 发布与许可
 

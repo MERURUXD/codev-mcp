@@ -2,9 +2,9 @@
   "schema_version": 1,
   "kind": "scheme_set",
   "name": "dbgauss-glass-schemes-demo",
-  "description": "Demonstration of scheme comparison on the synthetic test model dbgauss: the sample's own SCHOTT glasses, the nearest CDGM glasses and the nearest HOYA glasses (from the D8 candidate lists), each optimized with the same one-stage AUT spec; a fourth scheme changes the vignetting factors, whose error function values cannot be compared directly with the others. All values are demonstration values.",
+  "description": "Demonstration of scheme comparison for an 11-surface double Gauss laid out like the simulated backend's dbgauss model (stop on surface 6, F15 on surfaces 4 and 7, SK16 on 8 and 10): the baseline SCHOTT glasses, the nearest CDGM glasses and the nearest HOYA glasses (as listed by python -m codev_mcp.glass_near), each optimized with the same one-stage AUT spec; a fourth scheme changes the vignetting factors, whose error function values cannot be compared directly with the others. All values are demonstration values. AUT runs only with the real backend: use your own lens with the same surface layout and adapt surface numbers and values.",
   "schemes": [
-    {"name": "schott", "reason": "the sample's own glasses (baseline)"},
+    {"name": "schott", "reason": "baseline SCHOTT glasses"},
     {"name": "cdgm", "reason": "nearest CDGM glasses for F15 and SK16",
      "edits": [
        {"target": "surface", "surface": 4, "parameter": "glass", "value": "HF1_CDGM"},
@@ -17,7 +17,7 @@
        {"target": "surface", "surface": 7, "parameter": "glass", "value": "F15_HOYA"},
        {"target": "surface", "surface": 8, "parameter": "glass", "value": "BACD16_HOYA"},
        {"target": "surface", "surface": 10, "parameter": "glass", "value": "BACD16_HOYA"}]},
-    {"name": "vignetted", "reason": "sample glasses with more vignetting at fields 2 and 3",
+    {"name": "vignetted", "reason": "baseline glasses with more vignetting at fields 2 and 3",
      "field_set": {"fields": [{"y_angle": 0}, {"y_angle": 10, "vuy": 0.3, "vly": 0.4}, {"y_angle": 14, "vuy": 0.5, "vly": 0.5}]}}
   ]
 }

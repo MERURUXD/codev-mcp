@@ -2,7 +2,7 @@
 
 Everything the candidate process sends to CODE V is built here from validated
 fields; no user text becomes a command. The layout follows the D5 probe and the
-checkpoint C2 decisions (local validation records):
+checkpoint C2 decisions:
 
 * variables are opened one by one after ``FRZ S0..I``; a zero-cycle run must
   list exactly the requested parameters (composite bending rows allowed);

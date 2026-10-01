@@ -2,7 +2,7 @@
   "schema_version": 1,
   "kind": "aut_spec",
   "name": "dbgauss-three-stage-demo",
-  "description": "Demonstration of staged optimization on the synthetic test model dbgauss: monochromatic (d line only), then all wavelengths with thickness freedom and constraints, then a polish with a finer improvement threshold. All values are demonstration values.",
+  "description": "Demonstration of staged optimization for an 11-surface double Gauss laid out like the simulated backend's dbgauss model (stop on surface 6, F15 on surfaces 4 and 7, SK16 on 8 and 10): monochromatic (d line only), then all wavelengths with thickness freedom and constraints, then a polish with a finer improvement threshold. All values are demonstration values. AUT runs only with the real backend: use your own lens with the same surface layout and adapt surface numbers and values.",
   "wall_seconds": 900,
   "stages": [
     {

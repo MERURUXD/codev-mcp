@@ -12,9 +12,6 @@ build/
 logs/
 results/
 .codev-run/
-# Local text extraction of the local CODE V API manual, kept for
-# grepping; the vendor manual itself is not redistributed through this repo.
-docs/references/*.txt
 docs/tmp-*.txt
 # CODE V local recovery records
 codev*.rec

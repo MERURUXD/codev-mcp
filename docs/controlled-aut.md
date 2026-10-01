@@ -12,7 +12,7 @@ $env:PYTHONPATH = Join-Path (Get-Location).Path 'src'
 .\.venv\Scripts\python.exe -m codev_mcp.aut accept <工作目录>\new-aut-run\result.json
 ```
 
-单变量用法（1～8 循环、5～300 秒）不变：`--surface 1 --parameter radius --lower 25 --upper 80 --target 0 --cycles 1 --wall-seconds 90`，与 `--spec` 互斥。示例规格：[`aut-spec-dbgauss.json`](design/aut-spec-dbgauss.json)（一阶段 12 个变量，EFL／OAL／IMD 与 MNT／MNE）、[`aut-spec-dbgauss-stages.json`](design/aut-spec-dbgauss-stages.json)（单色 → 加谱线 → 抛光）。数值均为演示值。
+单变量用法（1～8 循环、5～300 秒）不变：`--surface 1 --parameter radius --lower 25 --upper 80 --target 0 --cycles 1 --wall-seconds 90`，与 `--spec` 互斥。示例规格：[`aut-spec-dbgauss.json`](design/aut-spec-dbgauss.json)（一阶段 12 个变量，EFL／OAL／IMD 与 MNT／MNE）、[`aut-spec-dbgauss-stages.json`](design/aut-spec-dbgauss-stages.json)（单色 → 加谱线 → 抛光）。数值均为演示值：这些示例按模拟后端 dbgauss 模型的 11 面双高斯面序编写，AUT 只能在真实后端运行，需换成你自己的同面序镜头，并按实际镜头改面号与数值。
 
 ## 规格（schema 1）
 
@@ -53,7 +53,7 @@ $env:PYTHONPATH = Join-Path (Get-Location).Path 'src'
 - 每一步生成阶段 `<name>-<k>`：先发送该步的视场修改（`y_angle`、`x_angle`、`weight`、渐晕因子，最多 12 步、每步 10 个视场，同一步不能重复视场），再是模板 `stage` 自己的 `lens_changes`，然后按普通阶段执行。可与 `stages`（先于爬升的阶段，例如调焦）并用，`field_ramp.then` 是爬升之后运行的普通阶段（例如变量更多的精修）；阶段总数上限 20。
 - 每步是一个阶段：留有自己的命令块、`ERR. F.` 变化、约束判定、候选文件 `candidate-stage-<n>.len` 与记录里的 `ramp_step`；某一步失败则停止，前面步骤的候选和 `last_good_stage` 保留。
 - **中间步骤只作为运行内的链式候选，不发布**：整次运行的最后一步候选仍然只能由 `accept` 显式接受。
-- 结果里 `spec` 是展开后的普通规格，`spec_input` 保留原始（含 `field_ramp`）规格；规格文件哈希对应原始字节。示例：[`aut-spec-dbgauss-ramp.json`](design/aut-spec-dbgauss-ramp.json)、[`aut-spec-wideang-ramp.json`](design/aut-spec-wideang-ramp.json)。起始的小视场镜头可用 `python -m codev_mcp.edit` 的 `field_set` 文件从样例生成（见[视场集合](field-set-and-seq-import.md)）。
+- 结果里 `spec` 是展开后的普通规格，`spec_input` 保留原始（含 `field_ramp`）规格；规格文件哈希对应原始字节。示例：[`aut-spec-dbgauss-ramp.json`](design/aut-spec-dbgauss-ramp.json)、[`aut-spec-wideang-ramp.json`](design/aut-spec-wideang-ramp.json)。起始的小视场镜头可用 `python -m codev_mcp.edit` 的 `field_set` 文件从自己的起始镜头生成（见[视场集合](field-set-and-seq-import.md)）。
 
 规格原始字节的 SHA-256 写入结果。没有自由命令、宏、`IN` 或用户字符串进入 CODE V。
 
@@ -67,7 +67,7 @@ $env:PYTHONPATH = Join-Path (Get-Location).Path 'src'
 2. 零循环 `AUT; ERR CDV; MXC 0; VLI Y; GO`：`VARIABLE LIST` 中出现的参数集合必须与请求完全一致（CODE V 自动生成的弯曲组合行可以接受）。
 3. 发送误差函数参数、变量界、约束和通用约束；`OUT <服务文件>` 后异步 `GO`，完成后先取 `GetCommandOutput`，再 `OUT T`，读取重定向文件。`OUT T` 失败视为 AUT 未交回提示符：不再发送任何命令，只清理本会话记录的进程。
 4. 解析文件：必须有 `Normal AUTO Completion` 行和逐循环 `ERR. F.`；具体约束从最后一个带约束表的循环读取 target／value／diff（6／6／4 位有效数字），逐条判定 `satisfied`／`violated`／`unknown`（打印精度跨越容差时）；记录活动的通用约束名称和 `Frozen Thickness Violations` 警告。
-5. 只把 `FRZ` 与开放变量改变的数值控制码恢复为原值（例如 dbgauss 的 `THC S12 0`），`PIM` 等求解码不动。
+5. 只把 `FRZ` 与开放变量改变的数值控制码恢复为原值（例如原镜头中的 `THC Sn 0`），`PIM` 等求解码不动。
 6. 回读快照：只允许本阶段变量、求解控制参数（例如 `PIM` 像距）、本阶段权重修改（和 `SET VIG` 的渐晕因子）变化，其余任何变化使阶段失败。通用约束由服务按[规格判定](design/design-spec.md#规格判定)的中心／边缘厚度独立复核（覆盖所有元件，边缘定义与 CODE V 不同，已注明）。复核采用与具体约束相同的缺省容差（限值的 1e-6 相对，至少 1e-6 绝对），因为 CODE V 把厚度推到边界时回读值可能差 1e-15 量级；结果列出限值与容差。
 7. 保存 `candidate-stage-<n>.len`，重新载入并核对快照，下一阶段从这个文件开始。
 

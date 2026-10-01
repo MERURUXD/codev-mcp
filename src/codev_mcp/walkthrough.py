@@ -4,7 +4,7 @@ The generator only formats what the runs recorded: numbers keep their units,
 precision notes and source, nothing is recomputed or estimated, and anything
 missing is written as missing. Records whose source is ``simulated`` are marked
 as having no optical meaning. The text template is the ``ZH`` table below; the
-record format (local validation records) does not depend on it.
+record format does not depend on it.
 """
 from __future__ import annotations
 

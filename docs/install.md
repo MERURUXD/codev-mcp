@@ -59,7 +59,7 @@ $config | ConvertTo-Json -Depth 6
 ```
 
 把生成的 JSON 加入客户端配置。真实后端把 `simulated` 改成 `com`；需要 Windows、CODE V 10.2 的 COM 注册和可用许可证。
-真实镜头由用户自行提供绝对 `.len` 路径给 `open_lens`，不需要厂商样例。源码目录之外使用 wheel 安装时也可使用相同配置；工作目录必须可写。
+真实镜头由用户自行提供绝对 `.len` 路径给 `open_lens`，不需要厂商样例。源码目录之外使用 wheel 安装时，MCP 服务可使用相同配置，工作目录必须可写。独立命令行工具（`compare`、`batch`、`scan`、`scale`、`edit`、`seq_import`、`export_seq`、`glass`、`glass_near`，以及调用 `edit` 的 `schemes`）的引擎工作目录由包的安装位置推出，`--output-dir` 不改变它；wheel 安装时会落在 Python 环境 `Lib` 下的 `.codev-run`，可能不可写。使用这些命令行工具时请按第 2 节在仓库根目录做可编辑安装。
 
 服务的 `serverInfo.version` 来自 MCP SDK；服务版本见 `get_status.service_version`。
 

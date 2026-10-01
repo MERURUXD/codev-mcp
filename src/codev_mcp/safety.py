@@ -22,7 +22,7 @@ GLASS_PATTERN = re.compile(r"^[A-Za-z0-9_.+-]{1,32}$")
 LENS_SUFFIX = ".len"
 
 #: CODE V writes 0.1E+19 for an infinite radius and about 9.9E+11 for an
-#: infinite thickness (measured in Phase C, see local validation records).
+#: infinite thickness (measured on a real machine).
 INFINITE_RADIUS_THRESHOLD = 1.0e17
 INFINITE_THICKNESS_THRESHOLD = 1.0e10
 

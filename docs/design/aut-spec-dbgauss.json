@@ -2,7 +2,7 @@
   "schema_version": 1,
   "kind": "aut_spec",
   "name": "dbgauss-multivariable-demo",
-  "description": "Demonstration: eight curvatures and four air spaces of the synthetic test model dbgauss with focal length, length and image-distance constraints. All values are demonstration values.",
+  "description": "Demonstration: eight curvatures and four air spaces of an 11-surface double Gauss laid out like the simulated backend's dbgauss model (stop on surface 6, F15 on surfaces 4 and 7, SK16 on 8 and 10) with focal length, length and image-distance constraints. All values are demonstration values. AUT runs only with the real backend: use your own lens with the same surface layout and adapt surface numbers and values.",
   "wall_seconds": 600,
   "stages": [
     {

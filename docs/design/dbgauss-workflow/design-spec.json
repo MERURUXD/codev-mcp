@@ -2,7 +2,7 @@
   "schema_version": 1,
   "kind": "design_spec",
   "name": "dbgauss-efl50-workflow-demonstration",
-  "description": "End-to-end demonstration on the synthetic test model dbgauss scaled to a 50 mm focal length. Every threshold is a demonstration value, not a design requirement.",
+  "description": "End-to-end demonstration for an 11-surface double Gauss laid out like the simulated backend's dbgauss model (stop on surface 6, F15 on surfaces 4 and 7, SK16 on 8 and 10), scaled to a 50 mm focal length. Every threshold is a demonstration value, not a design requirement.",
   "demonstration": true,
   "units": "mm",
   "system": {
