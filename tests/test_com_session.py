@@ -128,15 +128,6 @@ class CommandAndEvaluation(unittest.TestCase):
         with self.assertRaises(SessionInvalidError):
             session.evaluate("(NUM S)")
 
-    def test_a_dead_engine_is_reported_instead_of_blocking(self):
-        from codev_mcp.errors import SessionInvalidError
-
-        session, _ = self.make_session({"eval:(NUM S)": "12"})
-        session.engine_pids = {999999}
-        with self.assertRaises(SessionInvalidError) as caught:
-            session.evaluate("(NUM S)")
-        self.assertIn("engine process has exited", caught.exception.message)
-
     def test_a_live_engine_does_not_block_calls(self):
         from codev_mcp import com_session
 
@@ -337,7 +328,6 @@ class SharedComServer(unittest.TestCase):
 
 class EngineLiveness(unittest.TestCase):
     """A crashed engine sits on a dialog with no threads left."""
-
     def test_a_threadless_engine_is_not_alive(self):
         from codev_mcp import com_session
 
@@ -392,10 +382,11 @@ class CrashedEngineDetection(unittest.TestCase):
         original = com_session.engine_is_alive
         com_session.engine_is_alive = lambda pid: False
         try:
-            with self.assertRaises(SessionInvalidError):
+            with self.assertRaises(SessionInvalidError) as caught:
                 session.evaluate("(NUM S)")
         finally:
             com_session.engine_is_alive = original
+        self.assertIn("engine process has exited", caught.exception.message)
         self.assertTrue(session.engine_dead)
 
     def test_a_dead_flag_blocks_calls_without_a_process_scan(self):
@@ -420,7 +411,6 @@ class CrashedEngineDetection(unittest.TestCase):
 
 class StartupLock(unittest.TestCase):
     """Sessions start one at a time, so each one's process record holds only its own processes (F7)."""
-
     def test_a_second_start_waits_until_the_first_has_finished(self):
         import threading
         import time

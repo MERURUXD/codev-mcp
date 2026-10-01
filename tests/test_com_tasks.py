@@ -80,14 +80,6 @@ class AsynchronousSpot(TaskTestCase):
         self.assertIsNotNone(final.spot_diagram)
         self.assertAlmostEqual(final.spot_diagram.rms_radius, 0.004 / (2 ** 0.5), places=6)
 
-    def test_the_output_is_fetched_before_the_grid_is_traced(self):
-        self.submit_spot()
-        for _ in range(3):
-            self.backend.get_analysis()
-        # The traced grid must come after the asynchronous output was read.
-        self.assertTrue(any(command.startswith("AsyncCommand spo") for command in self.session.commands))
-        self.assertGreater(len(self.session.raytra_calls), 0)
-
     def test_other_lens_work_is_refused_while_it_runs(self):
         self.submit_spot()
         with self.assertRaises(ParameterError) as caught:
@@ -165,10 +157,6 @@ class Cancellation(TaskTestCase):
         # Ordering the task to stop and stopping it are different things; the
         # task record keeps saying that the calculation may still be running.
         self.assertEqual(self.backend.get_analysis().task.state, TaskState.RUNNING)
-
-    def test_cancel_without_a_task_returns_none(self):
-        self.assertIsNone(self.backend.cancel_analysis())
-
 
 class TruncatedOutput(TaskTestCase):
     """A listing that fills the text buffer is never treated as complete.

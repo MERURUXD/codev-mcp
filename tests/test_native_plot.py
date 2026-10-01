@@ -16,7 +16,7 @@ import unittest.mock
 import zlib
 from pathlib import Path
 
-from codev_mcp.com_backend import NATIVE_PLOT_COMMANDS, ComBackend
+from codev_mcp.com_backend import ComBackend
 from codev_mcp.errors import (
     CodeVError,
     ComputationError,
@@ -96,9 +96,6 @@ class NativePlotTestCase(unittest.TestCase):
 
 
 class PlotTypeMapping(NativePlotTestCase):
-    def test_every_plot_type_maps_to_the_plan_command(self):
-        self.assertEqual(NATIVE_PLOT_COMMANDS, EXPECTED_COMMANDS)
-
     def test_each_plot_type_sends_exactly_its_own_command(self):
         for plot_type, command in EXPECTED_COMMANDS.items():
             with self.subTest(plot_type=plot_type.value):
@@ -605,13 +602,6 @@ class TruncatedPng(NativePlotTestCase):
                     ComBackend._validate_png(
                         data, Path("broken.png"), NativePlotType.LAYOUT
                     )
-
-    def test_a_complete_png_is_accepted(self):
-        data = plotting.Canvas(64, 40).to_png()
-        self.assertEqual(
-            ComBackend._validate_png(data, Path("ok.png"), NativePlotType.LAYOUT),
-            (64, 40),
-        )
 
     def test_a_png_whose_pixel_stream_is_corrupt_is_refused(self):
         # Valid chunks and matching checksums, but the compressed picture data

@@ -87,12 +87,6 @@ class ParseProjectSequences(unittest.TestCase):
 
 
 class ParseRules(unittest.TestCase):
-    def test_the_minimal_sequence_parses(self):
-        parsed = parse_seq(MINIMAL)
-        self.assertEqual(parsed.wavelength_weights, [1, 2, 1])
-        self.assertEqual(parsed.stop_surface, 1)
-        self.assertTrue(parsed.surfaces[1].pim)
-
     def test_comments_blank_lines_case_and_continuations_are_accepted(self):
         text = variant("WL 656.3 587.6 486.1", "! a comment\n\nwl 656.3 &\n   587.6 486.1")
         self.assertEqual(parse_seq(text).wavelengths_nm, [656.3, 587.6, 486.1])

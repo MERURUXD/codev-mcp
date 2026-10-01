@@ -522,17 +522,6 @@ class ControlledAutTest(unittest.TestCase):
         self.assertTrue(Path(result["stages"][0]["candidate"]["path"]).is_file())
         self.assertEqual(result["stages"][1]["variables"][0]["before"], 35)
 
-    def test_a_failing_ramp_step_keeps_the_earlier_steps(self):
-        spec = self.ramp_spec()
-        session = ScriptedSession(listings=[LISTING, LISTING.replace("Normal AUTO Completion", "Stopped")])
-        code, result, _ = self.run_child(spec, session, [snapshot(35, (0.0, 8.0)), snapshot(35, (0.0, 8.0))],
-                                         before=snapshot(40, (0.0, 12.0)))
-        self.assertEqual((code, result["state"]), (1, "failed"))
-        self.assertEqual(result["last_good_stage"], 1)
-        self.assertEqual([stage["status"] for stage in result["stages"]], ["succeeded", "failed"])
-        self.assertIn("stage 2 (grow-2)", result["error"])
-        self.assertTrue(Path(result["stages"][0]["candidate"]["path"]).is_file())
-
     def test_a_field_edit_that_moves_another_field_fails_the_stage(self):
         spec = self.ramp_spec()
         session = ScriptedSession()

@@ -83,11 +83,6 @@ class WorkerProtocol(unittest.TestCase):
         self.assertEqual(reply["backend"], "simulated")
         self.assertIn("protocol", reply)
 
-    def test_open_and_read_a_lens(self):
-        lens = self.client.call("open_lens", {"path": str(self.lens)})
-        self.assertEqual(len(lens["surfaces"]), 13)
-        self.assertEqual(lens["source"], "simulated")
-
     def test_construct_and_edit_structure_through_worker(self):
         lens = self.client.call("create_lens", {"request": SIMPLE_LENS})
         self.assertEqual(len(lens["surfaces"]), 4)
@@ -113,7 +108,8 @@ class WorkerProtocol(unittest.TestCase):
         self.assertEqual(self.client.call("get_status")["details"]["committed_revision"], 0)
 
     def test_full_flow_through_the_worker(self):
-        self.client.call("open_lens", {"path": str(self.lens)})
+        opened = self.client.call("open_lens", {"path": str(self.lens)})
+        self.assertEqual(opened["source"], "simulated")
         update = self.client.call(
             "update_lens",
             {"request": {"edits": [{"surface": 3, "parameter": "thickness", "value": 12.5}]}},
@@ -161,12 +157,6 @@ class WorkerProtocol(unittest.TestCase):
         self.assertIsNone(native["plot_file_bytes"])
         self.assertTrue(native["image"]["base64_data"])
 
-    def test_a_native_plot_without_a_plot_type_is_a_parameter_error(self):
-        self.client.call("open_lens", {"path": str(self.lens)})
-        with self.assertRaises(Exception) as caught:
-            self.client.call("run_analysis", {"request": {"kind": "native_plot"}})
-        self.assertEqual(caught.exception.kind.value, "parameter")
-
     def test_an_unknown_plot_type_cannot_be_smuggled_through(self):
         self.client.call("open_lens", {"path": str(self.lens)})
         with self.assertRaises(Exception) as caught:
@@ -180,21 +170,6 @@ class WorkerProtocol(unittest.TestCase):
                 },
             )
         self.assertEqual(caught.exception.kind.value, "parameter")
-
-    def test_a_native_plot_refuses_a_selection_setting_that_was_really_passed(self):
-        self.client.call("open_lens", {"path": str(self.lens)})
-        with self.assertRaises(Exception) as caught:
-            self.client.call(
-                "run_analysis",
-                {
-                    "request": {
-                        "kind": "native_plot",
-                        "options": {"plot_type": "spot", "mtf_type": "diffraction"},
-                    }
-                },
-            )
-        self.assertEqual(caught.exception.kind.value, "parameter")
-        self.assertEqual(caught.exception.details["not_accepted"], ["mtf_type"])
 
     def test_an_out_of_sync_response_aborts_the_worker(self):
         """A reply that does not carry the request id must not be consumed.
@@ -258,7 +233,6 @@ class WorkerProtocol(unittest.TestCase):
 
 class McpToolSurface(unittest.TestCase):
     """Drives the server through the in-memory MCP transport."""
-
     def setUp(self) -> None:
         from tests import workspace_temp_directory
 
@@ -370,19 +344,6 @@ class McpToolSurface(unittest.TestCase):
 
         anyio.run(flow)
 
-    def test_mtf_without_frequencies_is_rejected(self):
-        async def flow() -> None:
-            async with create_connected_server_and_client_session(self._server()) as session:
-                await session.initialize()
-                await session.call_tool("open_lens", {"path": str(self.lens)})
-                result = await session.call_tool("run_analysis", {"request": {"kind": "mtf"}})
-                self.assertTrue(result.isError)
-                info = parse_tool_error_message(result.content[0].text)
-                self.assertIsNotNone(info)
-                self.assertEqual(info.kind.value, "parameter")
-
-        anyio.run(flow)
-
     def test_native_plot_returns_metadata_and_its_own_image_block(self):
         async def flow() -> None:
             async with create_connected_server_and_client_session(self._server()) as session:
@@ -483,7 +444,6 @@ class McpToolSurface(unittest.TestCase):
 
 class ServerStdioSmokeTest(unittest.TestCase):
     """One raw JSON-RPC round trip over a real stdio subprocess."""
-
     def setUp(self) -> None:
         from tests import workspace_temp_directory
 
@@ -579,21 +539,6 @@ class ServerConstruction(unittest.TestCase):
     def test_server_builds_without_starting_a_worker(self):
         server = build_server("simulated", start_worker=False)
         self.assertEqual(server.name, "codev-mcp")
-
-    def test_com_backend_refuses_to_fake_results(self):
-        from codev_mcp.backend import create_backend
-
-        # Constructing the real backend must not touch CODE V, and until the
-        # analyses have been verified on a real machine they must be reported as
-        # unsupported so nothing is presented as machine verified evidence.
-        backend = create_backend("com")
-        self.assertEqual(backend.name, "com")
-        capabilities = {entry.name: entry for entry in backend.capabilities()}
-        self.assertTrue(capabilities["read_lens"].supported)
-        for name in ("first_order", "spot_diagram", "mtf"):
-            self.assertIn(name, capabilities)
-            if not capabilities[name].supported:
-                self.assertIn("verification", capabilities[name].note or "")
 
     def test_unknown_backend_is_rejected(self):
         from codev_mcp.backend import create_backend

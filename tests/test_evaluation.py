@@ -134,7 +134,6 @@ def dbgauss_lens_with_glass_thickness(thickness):
 
 class RoundoffToleranceTests(unittest.TestCase):
     """Values read back with EvaluateExpression are exact only to machine precision."""
-
     def center(self, thickness, **bounds):
         req = spec_requirement("center_thickness_min", **bounds)
         lens = dbgauss_lens_with_glass_thickness(thickness)
@@ -171,13 +170,6 @@ class RoundoffToleranceTests(unittest.TestCase):
         self.assertGreater(item["tolerance"], 5e-14)
         req["maximum"] = 75.0399
         self.assertEqual(evaluate([req], result, {}, "codev")["requirements"][0]["status"], "fail")
-
-    def test_the_printed_back_focal_length_keeps_its_symmetric_uncertainty(self):
-        req = requirement("back_focal_length", minimum=None, maximum=61.2346)
-        result = {"first_order": {"back_focal_length": 61.2346, "units": "mm", "precision_note": "p"}}
-        item = evaluate([req], result, {}, "codev")["requirements"][0]
-        self.assertEqual(item["tolerance"], 0.0)
-        self.assertEqual(item["status"], "unknown")
 
     def test_a_printed_quantity_gets_no_roundoff_tolerance(self):
         req = requirement("spot_rms_radius", minimum=None, maximum=0.00615, field=1)

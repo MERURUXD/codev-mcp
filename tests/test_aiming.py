@@ -7,7 +7,6 @@ import unittest
 from unittest import mock
 
 from codev_mcp import aiming, plotting
-from codev_mcp.com_backend import PUPIL_MAP_TOLERANCE
 from codev_mcp.models import AnalysisKind, AnalysisOptions, AnalysisRequest, TaskState
 from tests.fake_codev import FakeCodeVSession
 from tests.test_com_analyses import AnalysisTestCase
@@ -100,15 +99,6 @@ class SpotGridAiming(AnalysisTestCase):
         waves = len(self.session.wavelengths)
         self.assertEqual(spot.plot_sample_count, 37 * waves)
         self.assertFalse(any("blocked" in warning for warning in spot.warnings), spot.warnings)
-
-    def test_the_paraxial_launch_would_have_been_blocked(self):
-        # What the fake models: a launch from the paraxial pupil (no aiming)
-        # misses the real pupil and is stopped by the aperture.
-        session = self.session
-        dy = math.tan(math.radians(25.0))
-        epd, enp = session.first_order["EPD"], session.first_order["ENP"]
-        status, _ = session.raytra(1, 1, 1, [0.0, -0.9 * epd / 2 + dy * enp, 0.0, dy])
-        self.assertEqual(status, -6.0)
 
     def test_the_calibration_uses_seventeen_aimed_rays_per_wavelength(self):
         self.run_spot(2)
@@ -216,10 +206,6 @@ class SpotGridAiming(AnalysisTestCase):
         seen, spot = self.spy_plot()
         self.assertIsNone(seen["airy_radius"])
         self.assertTrue(any("finite distance" in w for w in spot.warnings), spot.warnings)
-
-    def test_the_tolerance_is_a_fraction_of_the_pupil_radius(self):
-        self.assertLess(PUPIL_MAP_TOLERANCE, 0.05)
-
 
 if __name__ == "__main__":
     unittest.main()

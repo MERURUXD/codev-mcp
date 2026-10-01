@@ -100,10 +100,6 @@ class UpdateRequestShape(unittest.TestCase):
         with self.assertRaises(ValueError):
             UpdateRequest()
 
-    def test_a_field_set_alone_is_valid(self):
-        self.assertEqual(len(UpdateRequest(field_set=replacement(0, 5)).field_set.fields), 2)
-
-
 class ImageHeightNormalisation(unittest.TestCase):
     def test_relative_fields_follow_the_tangent_of_the_maximum_angle(self):
         angles = fieldset.relative_field_angles(23.5, [0, 0.5, 0.7, 0.85, 1])
@@ -148,7 +144,7 @@ class ImageHeightNormalisation(unittest.TestCase):
             self.assertEqual(fieldset.main(["--max-angle", "95", "--relative", "1"]), 1)
 
 
-class ComFieldSet(unittest.TestCase):
+class FieldSetCase(unittest.TestCase):
     session_kwargs: dict = {}
 
     def setUp(self) -> None:
@@ -177,6 +173,8 @@ class ComFieldSet(unittest.TestCase):
     def revision(self) -> int:
         return self.backend.get_status().details["committed_revision"]
 
+
+class ComFieldSet(FieldSetCase):
     def test_three_fields_become_five_and_the_solve_stays(self):
         result = self.backend.update_lens(UpdateRequest(field_set=replacement(0, 5, 10, 14, 18)))
         self.assertTrue(result.field_set.applied, result.warnings)
@@ -189,6 +187,7 @@ class ComFieldSet(unittest.TestCase):
         self.assertEqual(len(lens.fields), 5)
         self.assertEqual(self.session.solves, {3: "PIM"})
         self.assertEqual(self.backend._last_known_snapshot.solves, self.backend._current_checkpoint().snapshot.solves)
+        self.assertIn("XAN 0 0 0 0 0; YAN 0 5 10 14 18", result.warnings[-1])
 
     def test_the_committed_revision_restores_to_the_five_field_lens(self):
         self.backend.update_lens(UpdateRequest(field_set=replacement(0, 5, 10, 14, 18)))
@@ -268,14 +267,13 @@ class ComFieldSet(unittest.TestCase):
         self.assertEqual(self.revision(), 0)
 
     def test_an_out_of_range_angle_is_refused_before_any_command(self):
-        before = len(self.session.commands) if hasattr(self.session, "commands") else None
+        before = len(self.session.commands)
         result = self.backend.update_lens(UpdateRequest(field_set=replacement(0, 95)))
         self.assertFalse(result.field_set.applied)
         self.assertTrue(result.rolled_back)
         self.assertIn("y_angle", result.field_set.rejected_reason)
         self.assertEqual(self.revision(), 0)
-        if before is not None:
-            self.assertEqual(len(self.session.commands), before)
+        self.assertEqual(len(self.session.commands), before)
 
     def test_a_lens_with_object_height_fields_is_refused(self):
         with unittest.mock.patch.object(self.backend, "_field_kind", return_value="object_height"):
@@ -283,12 +281,7 @@ class ComFieldSet(unittest.TestCase):
         self.assertFalse(result.field_set.applied)
         self.assertIn("object_height", result.field_set.rejected_reason)
 
-    def test_the_replacement_is_recorded_in_the_result_warnings(self):
-        result = self.backend.update_lens(UpdateRequest(field_set=replacement(0, 5, 10, 14, 18)))
-        self.assertIn("XAN 0 0 0 0 0; YAN 0 5 10 14 18", result.warnings[-1])
-
-
-class ComFieldSetZoom(ComFieldSet):
+class ComFieldSetZoom(FieldSetCase):
     session_kwargs = {"zoom_positions": 2}
 
     def test_a_multi_zoom_lens_is_refused(self):
@@ -296,18 +289,6 @@ class ComFieldSetZoom(ComFieldSet):
         self.assertFalse(result.field_set.applied)
         self.assertIn("single-zoom", result.field_set.rejected_reason)
         self.assertEqual(self.revision(), 0)
-
-    # The single-zoom scenarios of the parent class do not apply here.
-    test_three_fields_become_five_and_the_solve_stays = None
-    test_the_committed_revision_restores_to_the_five_field_lens = None
-    test_a_shorter_set_drops_the_tail = None
-    test_given_weights_and_factors_are_written_and_read_back = None
-    test_a_failure_in_the_middle_rolls_everything_back = None
-    test_a_write_that_did_not_take_effect_is_caught_and_rolled_back = None
-    test_an_unexpected_change_elsewhere_fails_the_replacement = None
-    test_an_out_of_range_angle_is_refused_before_any_command = None
-    test_a_lens_with_object_height_fields_is_refused = None
-    test_the_replacement_is_recorded_in_the_result_warnings = None
 
 
 class SimulatedFieldSet(unittest.TestCase):

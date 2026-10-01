@@ -393,30 +393,6 @@ class ComparisonTests(unittest.TestCase):
         self.assertEqual(manifest["analyses"][1]["actual_settings"]["frequencies"], [0.0, 20.0, 40.0])
         self.assertTrue((bundle / "comparison.md").is_file())
 
-    def test_bounded_reuse_matches_isolated_results_and_releases(self):
-        config = AnalysisConfig(kinds=("first_order", "spot_diagram", "mtf"), fields=(1,),
-                                frequencies=(0.0, 20.0), spot_grid=5)
-        with patch("codev_mcp.compare.ROOT", self.root):
-            isolated, first = run_comparison(self.source, self.source, self.root / "out", "simulated", 10,
-                                             client_factory=LocalClient, config=config)
-            reused, second = run_comparison(self.source, self.source, self.root / "out", "simulated", 10,
-                                            client_factory=LocalClient, config=config,
-                                            max_analyses_per_session=3)
-        self.assertEqual(first["status"], second["status"])
-        self.assertEqual(len(first["performance"]["sessions"]), 8)
-        self.assertEqual(len(second["performance"]["sessions"]), 4)
-        self.assertTrue(all(s["cleanup_confirmed"] for s in second["performance"]["sessions"]))
-        for a, b in zip(first["analyses"], second["analyses"]):
-            self.assertEqual((a["stage"], a["name"]), (b["stage"], b["name"]))
-            left = json.loads((isolated / a["snapshot"]).read_text())
-            right = json.loads((reused / b["snapshot"]).read_text())
-            kind = a["request"]["kind"]
-            for field in ("effective_focal_length", "rms_radius", "frequencies"):
-                if field in left[kind]:
-                    self.assertEqual(left[kind][field], right[kind][field])
-            self.assertIn("compute_seconds", b)
-            self.assertIn("read_after_seconds", b)
-
     def test_bounded_reuse_rejects_drift_and_closes_group(self):
         class DriftClient(LocalClient):
             instances = []
@@ -471,6 +447,8 @@ class ComparisonTests(unittest.TestCase):
             right = json.loads((reused / b["snapshot"]).read_text())
             kind = a["request"]["kind"]
             assert_equivalent(metrics(left[kind], kind), metrics(right[kind], kind))
+            self.assertIn("compute_seconds", b)
+            self.assertIn("read_after_seconds", b)
         first_session = second["analyses"][0]["session_id"]
         self.assertNotEqual(first_session, second["analyses"][9]["session_id"])
 
@@ -860,9 +838,6 @@ class ProtocolTests(unittest.TestCase):
         self.assertTrue(client.broken)  # an interrupted request leaves the stream untrustworthy
 
 
-if __name__ == "__main__":
-    unittest.main()
-
 
 class PupilRatioTests(unittest.TestCase):
     WAV = {"fields": [{"field_number": 1, "rms_waves": 1.0, "rays_traced": 948},
@@ -893,3 +868,7 @@ class PupilRatioTests(unittest.TestCase):
         self.assertTrue(any("光瞳不同" in line for line in pupil_notes(self.WAV, far)))
         self.assertEqual(pupil_notes({"fields": []}), [])
         self.assertTrue(any("不是追迹失败" in line for line in pupil_notes(self.WAV)))
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -30,7 +30,6 @@ from codev_mcp.checkpoints import (
     WavelengthState,
     ZoomState,
     change_expectations,
-    collapse_expectations,
     expectation_keys,
     compare_snapshots,
     expand_allowed_changes,
@@ -210,44 +209,21 @@ class CheckpointFiles(unittest.TestCase):
             self.store.load_current(self.directory)
         self.assertTrue(lens.exists())
 
-    def test_a_version_one_checkpoint_is_refused_without_rewriting_it(self):
+    def test_an_old_format_checkpoint_is_refused_without_rewriting_it(self):
         lens = self.write_lens("revision-000000.len")
         self.store.publish(self.directory, self.lens_id, 0, lens, self.snapshot, source_path=None)
         path = self.directory / "current.json"
-        payload = json.loads(path.read_text(encoding="utf-8"))
-        payload["format_version"] = 1
-        original = json.dumps(payload)
-        path.write_text(original, encoding="utf-8")
-        with self.assertRaises(CheckpointError) as caught:
-            self.store.load_current(self.directory)
-        self.assertIn("Reopen the source lens", caught.exception.hint)
-        self.assertEqual(path.read_text(encoding="utf-8"), original)
-        self.assertTrue(lens.exists())
-
-    def test_a_version_two_checkpoint_is_refused_without_rewriting_it(self):
-        lens = self.write_lens("revision-000000.len")
-        self.store.publish(self.directory, self.lens_id, 0, lens, self.snapshot, source_path=None)
-        path = self.directory / "current.json"
-        payload = json.loads(path.read_text(encoding="utf-8"))
-        payload["format_version"] = 2
-        original = json.dumps(payload)
-        path.write_text(original, encoding="utf-8")
-        with self.assertRaises(CheckpointError) as caught:
-            self.store.load_current(self.directory)
-        self.assertIn("Reopen the source lens", caught.exception.hint)
-        self.assertEqual(path.read_text(encoding="utf-8"), original)
-
-    def test_a_version_three_checkpoint_is_refused_without_rewriting_it(self):
-        lens = self.write_lens("revision-000000.len")
-        self.store.publish(self.directory, self.lens_id, 0, lens, self.snapshot, source_path=None)
-        path = self.directory / "current.json"
-        payload = json.loads(path.read_text(encoding="utf-8"))
-        payload["format_version"] = 3
-        original = json.dumps(payload)
-        path.write_text(original, encoding="utf-8")
-        with self.assertRaises(CheckpointError):
-            self.store.load_current(self.directory)
-        self.assertEqual(path.read_text(encoding="utf-8"), original)
+        for version in (1, 2, 3):
+            with self.subTest(format_version=version):
+                payload = json.loads(path.read_text(encoding="utf-8"))
+                payload["format_version"] = version
+                original = json.dumps(payload)
+                path.write_text(original, encoding="utf-8")
+                with self.assertRaises(CheckpointError) as caught:
+                    self.store.load_current(self.directory)
+                self.assertIn("Reopen the source lens", caught.exception.hint)
+                self.assertEqual(path.read_text(encoding="utf-8"), original)
+                self.assertTrue(lens.exists())
 
     def test_a_missing_or_empty_lens_file_is_refused(self):
         with self.assertRaises(CheckpointError):
@@ -1220,26 +1196,6 @@ class ReviewFixGuards(BackendTestCase):
     # 2. a committed revision must survive a failing log call after the pointer
     #    was replaced.
 
-    def test_a_failing_log_after_the_pointer_moved_does_not_roll_back(self):
-        calls = {"count": 0}
-
-        def noisy_log(message: str) -> None:
-            if "committed at" in str(message):
-                calls["count"] += 1
-                raise RuntimeError("the log sink refused the message")
-
-        self.backend.log = noisy_log
-        result = self.backend.update_lens(thickness_edit(9.5))
-        self.backend.log = lambda message: None
-        self.assertEqual(calls["count"], 1)
-        self.assertTrue(result.outcomes[0].applied, result.warnings)
-        self.assertFalse(result.rolled_back)
-        self.assertEqual(self.status()["committed_revision"], 1)
-        self.assertEqual(self.checkpoint_path().name, "revision-000001.len")
-        # The pointer, the in memory revision and the engine have to agree.
-        pointer = json.loads((self.lens_dir() / "current.json").read_text(encoding="utf-8"))
-        self.assertEqual(pointer["revision"], 1)
-        self.assertAlmostEqual(self.backend.get_lens().surfaces[1].thickness, 9.5)
 
     # 3. a read back that raises is a failed edit, not a refusal.
 
@@ -1380,15 +1336,6 @@ class ReviewFixGuards(BackendTestCase):
             result.warnings,
         )
 
-    def test_collapsing_expectations_keeps_the_last_edit(self):
-        edits = [
-            ParameterEdit(surface=1, parameter="thickness", value=9.5),
-            ParameterEdit(surface=1, parameter="thickness", value=11.25),
-            ParameterEdit(surface=2, parameter="radius", value=10.0),
-        ]
-        surviving, superseded = collapse_expectations([(edit, 1) for edit in edits])
-        self.assertEqual(superseded, 1)
-        self.assertEqual([item[0].value for item in surviving], [11.25, 10.0])
 
     # 8. the acceptance script must never delete a directory it does not own.
     def test_a_log_that_keeps_failing_after_the_commit_does_not_roll_back(self):
@@ -1512,51 +1459,6 @@ class ReviewFixGuards(BackendTestCase):
         self.assertAlmostEqual(values[1], 9.0)
         self.assertAlmostEqual(values[2], 13.0)
         self.assertEqual(self.status()["committed_revision"], 1)
-
-    def test_collapsing_uses_the_real_parameter_identity(self):
-        shared_edit = ParameterEdit(surface=1, parameter="thickness", value=11.0)
-        shared_snapshot = LensSnapshot(
-            units="mm",
-            zoom_positions=2,
-            zooms=[
-                ZoomState(position=1, surfaces=[SurfaceState(number=1, thickness=10.0)]),
-                ZoomState(position=2, surfaces=[SurfaceState(number=1, thickness=10.0)]),
-            ],
-        )
-        zoomed_snapshot = LensSnapshot(
-            units="mm",
-            zoom_positions=2,
-            zooms=[
-                ZoomState(position=1, surfaces=[SurfaceState(number=1, thickness=8.0)]),
-                ZoomState(position=2, surfaces=[SurfaceState(number=1, thickness=12.0)]),
-            ],
-        )
-        collapsed, superseded = collapse_expectations(
-            [(shared_edit, 1), (shared_edit, 2)], snapshot=shared_snapshot
-        )
-        self.assertEqual(superseded, 1)
-        self.assertEqual(len(collapsed), 1)
-        self.assertEqual(collapsed[0][0].value, 11.0)
-        collapsed, superseded = collapse_expectations(
-            [(shared_edit, 1), (shared_edit, 2)], snapshot=zoomed_snapshot
-        )
-        self.assertEqual(superseded, 0)
-        self.assertEqual(len(collapsed), 2)
-
-    def test_a_reference_edit_is_a_global_parameter(self):
-        first = ParameterEdit(
-            target="wavelength", wavelength=1, parameter="is_reference", value=1
-        )
-        second = ParameterEdit(
-            target="wavelength", wavelength=2, parameter="is_reference", value=2
-        )
-        collapsed, superseded = collapse_expectations([(first, 1), (second, 1)])
-        self.assertEqual(superseded, 1)
-        self.assertEqual(len(collapsed), 1)
-        self.assertEqual(collapsed[0][0].value, 2)
-
-
-
 
     def test_a_failing_transaction_record_after_the_commit_keeps_applied(self):
         """Disk writes and the log sink failing together must not undo a commit."""

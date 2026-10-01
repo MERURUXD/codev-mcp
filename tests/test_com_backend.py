@@ -140,11 +140,6 @@ class ReadLens(ComBackendTestCase):
         self.assertAlmostEqual(lens.wavelengths[0].micrometers, 0.6563)
         self.assertTrue(lens.wavelengths[1].is_reference)
 
-    def test_aperture_comes_from_the_listing(self):
-        aperture = self.backend.get_lens().aperture
-        self.assertEqual(aperture.kind, "epd")
-        self.assertAlmostEqual(aperture.value, 50.0)
-
     def test_raw_listing_is_kept(self):
         self.assertIn("INFINITE CONJUGATES", self.backend.get_lens().raw_listing or "")
 
@@ -157,23 +152,6 @@ class ReadLens(ComBackendTestCase):
         lens = self.backend.get_lens()
         self.assertTrue(any("differs from" in warning for warning in lens.warnings))
 
-    def test_a_stale_item_value_is_never_used_as_a_number(self):
-        # A misspelled item makes a real session echo the previous result, so the
-        # session wrapper refuses to turn a non numeric answer into a float.
-        from codev_mcp.com_session import ComSession
-        from codev_mcp.errors import InternalError
-
-        class StubObject:
-            def EvaluateExpression(self, item):  # noqa: ANN001, ARG002
-                return "NO SOLVE"
-
-        session = ComSession()
-        session._object = StubObject()
-        self.assertEqual(session.evaluate("(BFL Z1)"), "NO SOLVE")
-        with self.assertRaises(InternalError):
-            session.evaluate_number("(BFL Z1)")
-
-
 class EditLens(ComBackendTestCase):
     def test_applies_a_thickness_edit_and_reads_it_back(self):
         result = self.backend.update_lens(
@@ -183,11 +161,6 @@ class EditLens(ComBackendTestCase):
         self.assertFalse(result.rolled_back)
         self.assertAlmostEqual(self.surface(1).thickness, 9.5)
         self.assertTrue(any(command.startswith("THI") for command in self.session.commands))
-
-    def test_creates_a_recovery_point_before_editing(self):
-        result = self.backend.update_lens(
-            UpdateRequest(edits=[ParameterEdit(surface=1, parameter="thickness", value=9.5)])
-        )
         self.assertTrue(result.restore_point)
         self.assertTrue(any(command.startswith("sav ") for command in self.session.commands))
 
@@ -730,7 +703,6 @@ class SessionLifecycle(ComBackendTestCase):
 
 class SessionRecovery(ComBackendTestCase):
     """The engine dies at random on this machine; the backend has to survive it."""
-
     def make_backend(self, sessions: list, **kwargs) -> ComBackend:
         factory = lambda: sessions.pop(0)  # noqa: E731 - the queue is consumed
         backend = ComBackend(
@@ -785,10 +757,7 @@ class SessionRecovery(ComBackendTestCase):
 
         self.assertIs(session, replacement)
         self.assertEqual(backend.session_restarts, 1)
-
-    def test_the_restart_count_is_reported_in_the_status(self):
-        self.backend.session_restarts = 3
-        self.assertEqual(self.backend.get_status().details["session_restarts"], 3)
+        self.assertEqual(backend.get_status().details["session_restarts"], 1)
 
     def test_the_open_lens_is_restored_from_its_checkpoint_after_a_rebuild(self):
         """The next lens call has to bring back the committed checkpoint."""

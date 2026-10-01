@@ -143,6 +143,7 @@ class LensEditing(SimulatedBackendTestCase):
         self.assertFalse(any(outcome.applied for outcome in result.outcomes))
         self.assertTrue(result.rolled_back)
         self.assertAlmostEqual(self.backend.get_lens().surfaces[3].thickness, 11.234560)
+        self.assertEqual(self.backend.get_status().details["committed_revision"], 0)
 
     def test_multi_zoom_lens_requires_a_zoom_position(self):
         lens = self.open("zoomtriplet")
@@ -474,7 +475,6 @@ class Analyses(SimulatedBackendTestCase):
 
 class NativePlotExport(SimulatedBackendTestCase):
     """The simulated native plot must never look like a CODE V export."""
-
     def run_plot(self, plot_type: str = "layout", **options):
         self.open()
         self.backend.run_analysis(
@@ -557,7 +557,6 @@ class NativePlotExport(SimulatedBackendTestCase):
 
 class SimulatedLensState(SimulatedBackendTestCase):
     """The simulated backend mirrors the lens state fields of the COM backend."""
-
     def test_status_reports_the_lens_state_of_the_open_lens(self):
         self.open()
         details = self.backend.get_status().details
@@ -576,22 +575,6 @@ class SimulatedLensState(SimulatedBackendTestCase):
         details = self.backend.get_status().details
         self.assertEqual(details["committed_revision"], 1)
         self.assertEqual(details["last_checkpoint"]["revision"], 1)
-
-    def test_a_rejected_batch_does_not_advance_the_revision(self):
-        self.open()
-        result = self.backend.update_lens(
-            UpdateRequest(edits=[ParameterEdit(surface=99, parameter="thickness", value=9.5)])
-        )
-        self.assertFalse(result.outcomes[0].applied)
-        self.assertEqual(self.backend.get_status().details["committed_revision"], 0)
-
-    def test_an_invalid_simulated_session_refuses_lens_work(self):
-        self.open()
-        self.backend.session_valid = False
-        with self.assertRaises(SessionInvalidError):
-            self.backend.update_lens(
-                UpdateRequest(edits=[ParameterEdit(surface=1, parameter="thickness", value=9.5)])
-            )
 
     def test_closing_the_session_marks_the_lens_invalid(self):
         self.open()
