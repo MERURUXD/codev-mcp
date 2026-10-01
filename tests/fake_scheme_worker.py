@@ -1,7 +1,8 @@
 """Stand-in for ``python -m codev_mcp.schemes _scheme`` in the parallel scheduling tests.
 
 The scheme's ``reason`` says what to do: ``sleep:<seconds>`` (optionally followed by ``,fail``, ``,doubt``,
-``,crash`` or ``,hang``). Start and end lines go to ``worker-log.txt`` beside the scheme directories, so a
+``,crash``, ``,hang`` or ``,barrier:a+b`` to wait for named workers to start).
+Start and end lines go to ``worker-log.txt`` beside the scheme directories, so a
 test can see how many workers overlapped. No CODE V is involved.
 """
 from __future__ import annotations
@@ -26,6 +27,16 @@ def main() -> int:
     name = request["scheme"]["name"]
     actions = (request["scheme"].get("reason") or "sleep:0").split(",")
     log(request, f"start {name}")
+    for action in actions:
+        if action.startswith("barrier:"):
+            ready = Path(request["result_path"]).parent
+            (ready / f"{name}-started").write_text("ready", encoding="utf-8")
+            peers = action.split(":", 1)[1].split("+")
+            deadline = time.monotonic() + 30
+            while not all((ready / f"{peer}-started").is_file() for peer in peers):
+                if time.monotonic() >= deadline:
+                    raise RuntimeError("Fake worker start barrier timed out")
+                time.sleep(0.01)
     time.sleep(float(actions[0].split(":")[1]))
     if "hang" in actions:
         time.sleep(120)

@@ -342,7 +342,7 @@ class RunTests(unittest.TestCase):
         spec.write_text("{}", encoding="utf-8")
         _, manifest = self.execute({"name": "a"}, {"name": "b"}, design_spec=spec)
         self.assertEqual(len(self.eval_calls), 2)
-        self.assertEqual(self.eval_calls[0][1]["spec_path"], spec)
+        self.assertEqual(self.eval_calls[0][1]["spec_path"], spec.resolve())
         self.assertEqual(manifest["schemes"][0]["evaluation"]["status"], "pass")
 
         def broken(initial, final, output_dir, **kwargs):
@@ -494,8 +494,8 @@ class RunTests(unittest.TestCase):
         self.assertEqual(manifest["status"], "partial")
 
     def test_processes_in_doubt_stop_new_launches_but_let_the_running_ones_finish(self):
-        directory, manifest = self.parallel(2, {"name": "a", "reason": "sleep:2.5"},
-                                            {"name": "b", "reason": "sleep:0.1,doubt"},
+        directory, manifest = self.parallel(2, {"name": "a", "reason": "sleep:2.5,barrier:a+b"},
+                                            {"name": "b", "reason": "sleep:0.1,barrier:a+b,doubt"},
                                             {"name": "c"}, {"name": "d"})
         states = {item["name"]: item["status"] for item in manifest["schemes"]}
         self.assertEqual(states, {"a": "succeeded", "b": "failed", "c": "skipped", "d": "skipped"})
