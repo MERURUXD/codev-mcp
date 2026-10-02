@@ -1,5 +1,7 @@
 # 批量镜头报告
 
+[English](batch-workflow.en.md)
+
 `python -m codev_mcp.batch` 通过公共 MCP 工具串行分析。第一份 `--lens` 是参考镜头，其余镜头逐份与它比较；每对镜头使用独立的、不可覆盖的对比包，输入按绝对路径生成稳定标识。
 
 ```powershell

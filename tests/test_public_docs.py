@@ -13,6 +13,8 @@ PUBLIC_DOCS += ["docs/" + name + ".md" for name in (
     "README", "install", "capabilities", "comparison-workflow", "controlled-aut", "batch-workflow",
     "parameter-scan", "performance-workflow", "scheme-comparison", "deliverable",
     "field-set-and-seq-import", "glass-catalog")]
+PUBLIC_DOCS += [name[:-3] + ".en.md" for name in PUBLIC_DOCS if name not in {"README.md", "README.en.md",
+    "CONTRIBUTING.md", "tests/data/project-owned/README.md"}]
 
 
 def markdown_text(path: Path) -> str:

@@ -1,5 +1,7 @@
 # 本机玻璃目录查询
 
+[English](glass-catalog.en.md)
+
 `python -m codev_mcp.glass` 是独立的只读 CLI，不增加 MCP 工具。它通过版本化 `CodeV.Command.102` 在本机查询 CODE V 10.2 预装目录，查询过程使用服务自建的无界面会话，不读取或改写用户镜头。
 
 ```powershell

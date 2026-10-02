@@ -1,5 +1,7 @@
 # 多方案比较
 
+[English](scheme-comparison.en.md)
+
 独立 CLI `python -m codev_mcp.schemes`：从**同一基线镜头**出发批量运行多个设计方案（换玻璃、改渐晕或视场集合、换约束集），每个方案是“类型化修改 → 分阶段 AUT → 候选”，最后汇总并列出哪些量可以直接比较、哪些不能。它只推荐，**不接受任何候选**；采用某个候选仍要另外运行 `python -m codev_mcp.aut accept`。不新增 MCP 工具，也不发送新的 CODE V 命令：修改由 [`codev_mcp.edit`](field-set-and-seq-import.md)（一次 `update_lens` 事务）完成，优化由 [`codev_mcp.aut`](controlled-aut.md)（含视场爬升）完成，规格判定可选地由 [`codev_mcp.compare`](comparison-workflow.md) 完成。
 
 ```powershell

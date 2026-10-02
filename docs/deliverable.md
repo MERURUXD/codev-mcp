@@ -1,5 +1,7 @@
 # 交付整理
 
+[English](deliverable.en.md)
+
 独立 CLI `python -m codev_mcp.deliver` 把已经跑完的评价包和 AUT 运行整理成报告素材，按报告里常用的目录和文件名排好，并生成资料索引。它只复制、核对哈希和排版：**不重算任何数值，不向 CODE V 发送命令，不写输入**，目标目录必须不存在（已存在即拒绝）。
 
 ```powershell

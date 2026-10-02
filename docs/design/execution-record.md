@@ -1,5 +1,7 @@
 # 执行记录格式（schema 1）
 
+[English](execution-record.en.md)
+
 每个写镜头的工作流在自己的运行目录留下 `execution-record.json`，作为之后生成设计记录（walkthrough）的唯一数据来源。生成器只渲染记录中的数值，不重算、不估算；缺失项写明缺失。
 
 | `action` | 写入者 | 运行目录 | 说明 |

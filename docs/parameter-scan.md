@@ -1,5 +1,7 @@
 # 固定网格参数扫描
 
+[English](parameter-scan.en.md)
+
 `python -m codev_mcp.scan` 使用公共 MCP 工具扫描单变焦镜头的一个现有表面半径或厚度。每个样本在独立服务会话中打开同一基线快照的独立副本，事务编辑后回读，再运行当前焦面的一阶参数分析。它不执行 CODE V AUT，不挑选或发布最优镜头，也不修改输入文件。
 
 ```powershell

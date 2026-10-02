@@ -1,5 +1,7 @@
 # 使用文档
 
+[English](README.en.md)
+
 - [install](install.md)
 - [capabilities](capabilities.md)
 - [comparison-workflow](comparison-workflow.md)

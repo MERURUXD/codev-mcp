@@ -1,5 +1,7 @@
 # 从空目录开始的模拟流程
 
+[English](README.en.md)
+
 下载或克隆本仓库，在仓库根目录执行：
 
 ```powershell

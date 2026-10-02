@@ -1,5 +1,7 @@
 # 视场集合、按像高归一化与 `.seq` 导入
 
+[English](field-set-and-seq-import.en.md)
+
 本页说明 `update_lens` 的整体视场集合替换、`create_lens` 的 `PIM` 像面求解和 `.seq` 白名单导入。公共工具仍是十一个；所有输入经类型化校验，不执行任意命令、宏或 `IN`。
 
 ## 1. 替换视场集合：`update_lens` 的 `field_set`

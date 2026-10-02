@@ -1,5 +1,7 @@
 # 初始／最终镜头分析对比
 
+[English](comparison-workflow.en.md)
+
 `python -m codev_mcp.compare` 是公共 MCP 工具的命令行客户端，不新增公共工具。它不执行任意 CODE V 命令、不做优化、不改焦，也不修改输入文件。
 
 ## 使用

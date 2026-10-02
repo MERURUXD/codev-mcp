@@ -12,7 +12,7 @@ Separate command-line tools cover lens evaluation and comparison, parameter scan
 
 ## Features
 
-**MCP tools (11):** `get_status`, `open_lens`, `create_lens`, `get_lens`, `update_lens`, `edit_lens_structure`, `run_analysis`, `get_analysis`, `cancel_analysis`, `save_lens_as`, `close_session`. Limits, precision and units for each are listed in [capabilities](docs/capabilities.md) (Chinese).
+**MCP tools (11):** `get_status`, `open_lens`, `create_lens`, `get_lens`, `update_lens`, `edit_lens_structure`, `run_analysis`, `get_analysis`, `cancel_analysis`, `save_lens_as`, `close_session`. Limits, precision and units for each are listed in [capabilities](docs/capabilities.en.md).
 
 **Command-line tools** (`python -m codev_mcp.<name>`): `compare`, `batch`, `scan`, `scale`, `edit`, `fieldset`, `glass`, `glass_near`, `aut`, `schemes`, `export_seq`, `seq_import`, `deliver`, `walkthrough`. They reuse the public tools or the server's own sessions and never accept arbitrary commands. Use them from an editable install in the repository root, because their engine work directories follow the install location.
 
@@ -46,7 +46,7 @@ MCP client configuration (replace the paths; use `simulated` instead of `com` wi
 }
 ```
 
-After restarting the client, call `get_status` to confirm the backend and CODE V version. Further options and troubleshooting are in the [installation guide](docs/install.md) (Chinese), and the demo is described in [examples](examples/README.md).
+After restarting the client, call `get_status` to confirm the backend and CODE V version. Further options and troubleshooting are in the [installation guide](docs/install.en.md), the other guides are listed in the [documentation index](docs/README.en.md), and the demo is described in [examples](examples/README.en.md).
 
 ## Development and license
 
