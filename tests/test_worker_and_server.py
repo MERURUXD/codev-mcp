@@ -710,7 +710,8 @@ class ServerConstruction(unittest.TestCase):
         """An installed package used to put its runs beside site-packages (review L7)."""
         from codev_mcp.backend import default_working_directory
 
-        self.assertEqual(Path(default_working_directory()), WORKSPACE / ".codev-run")
+        checkout = WORKSPACE / "src" / "codev_mcp" / "backend.py"
+        self.assertEqual(Path(default_working_directory(checkout)), WORKSPACE / ".codev-run")
         installed = Path(r"D:\Python\Lib\site-packages\codev_mcp\backend.py")
         self.assertEqual(
             Path(default_working_directory(installed, {"LOCALAPPDATA": r"D:\Profile\AppData\Local"})),
