@@ -119,8 +119,11 @@ def engine_is_alive(pid: int) -> bool:
         if not process.is_running() or process.status() == psutil.STATUS_ZOMBIE:
             return False
         return process.num_threads() > 0
-    except Exception:  # noqa: BLE001 - a gone process is a dead engine
-        return False
+    except Exception as exc:  # noqa: BLE001 - a gone process is a dead engine
+        # Access denied says nothing about the engine; calling it dead would let a watchdog kill a
+        # healthy process or drop a working session.
+        denied = getattr(psutil, "AccessDenied", None)
+        return isinstance(denied, type) and isinstance(exc, denied)
 
 
 def _psutil() -> Any:
@@ -156,7 +159,10 @@ def _matching_owned(pid: int, recorded: dict[str, Any]) -> bool | None:
     if current is None:
         return False
     if recorded.get("created_at") is None:
-        return None
+        # Without a start time only a different program name proves the recorded process is gone
+        # (its pid was reused); the same name can still be ours and stays undecided.
+        name = recorded.get("name")
+        return False if name and current.get("name") != str(name).lower() else None
     if current != recorded:
         return False
     return True
@@ -166,6 +172,31 @@ def _matching_owned(pid: int, recorded: dict[str, Any]) -> bool | None:
 STARTUP_MUTEX_NAME = "Local\\codev-mcp-session-start"
 #: Longest wait for another session's start to finish (a first start can take about two minutes).
 STARTUP_LOCK_WAIT_SECONDS = 600
+
+#: CODE V starts its windowless engine unreliably on this machine: the engine
+#: sometimes dies behind an application error dialog before StartCodeV returns.
+#: The failure is transient, so the session is retried a few times, each time
+#: after the crashed processes have been cleaned up.
+START_ATTEMPTS = 4
+START_RETRY_DELAY_SECONDS = 3.0
+#: After every attempt failed, a new start is refused for this long instead of for good.
+START_RETRY_COOLDOWN_SECONDS = 60.0
+#: Allowance for abandoning one failed attempt: StopCodeV, the shutdown check
+#: and the kills that follow it.
+START_ATTEMPT_STOP_SECONDS = 60
+
+
+def session_start_budget_seconds(attempts: int = START_ATTEMPTS) -> float:
+    """Longest a call that has to start the session may legitimately take for the start alone.
+
+    One wait for another session's start, then every attempt with its bounded StartCodeV, its
+    abandonment and the pause before the next one. A caller that gives up sooner kills a worker
+    whose CODE V processes then hold a licence until the next start cleans them up.
+    """
+    attempts = max(1, int(attempts))
+    return (STARTUP_LOCK_WAIT_SECONDS
+            + attempts * (STARTUP_TIMEOUT_MS / 1000 + START_ATTEMPT_STOP_SECONDS)
+            + (attempts - 1) * START_RETRY_DELAY_SECONDS)
 
 
 class _StartupLock:
@@ -459,8 +490,15 @@ class ComSession:
             self._note(f"unreadable session file {path}: {exc}")
             raise SessionInvalidError("Recorded CODE V process ownership is unreadable.",
                                       details={"path": str(path), "error": str(exc)}) from exc
-        recorded = {int(pid): value if isinstance(value, dict) else {"name": value}
-                    for pid, value in (data.get("processes") or {}).items()}
+        try:
+            recorded = {int(pid): value if isinstance(value, dict) else {"name": value}
+                        for pid, value in (data.get("processes") or {}).items()}
+        except (AttributeError, TypeError, ValueError) as exc:
+            # Valid JSON of the wrong shape is as unreadable as broken JSON: the ownership it should
+            # prove cannot be checked, so the record stays and the start is refused the same way.
+            self._note(f"malformed session file {path}: {exc}")
+            raise SessionInvalidError("Recorded CODE V process ownership is unreadable.",
+                                      details={"path": str(path), "error": str(exc)}) from exc
         shared = shared_server_pids(recorded)
         targets = [pid for pid, identity in recorded.items()
                    if pid not in shared and _matching_owned(pid, identity) is True]
@@ -473,11 +511,29 @@ class ComSession:
                      if pid not in shared and _matching_owned(pid, identity) is not False]
         if remaining:
             self._note(f"leftover ownership could not be released or verified: {remaining}")
-            raise SessionInvalidError("Previous CODE V session cleanup was not confirmed.",
-                                      details={"remaining_pids": remaining})
+            raise SessionInvalidError(
+                "Previous CODE V session cleanup was not confirmed.",
+                details={"remaining_pids": remaining, "session_file": str(path)},
+                hint=(f"If no codev-mcp service is using CODE V processes {remaining}, end them "
+                      f"(Task Manager or taskkill /PID <pid>) and delete {path}, then try again."))
         self.cleaned_processes = targets
         self._forget_session()
         return targets
+
+    def release_leftovers(self) -> list[int]:
+        """Clean up a recorded dead session without starting a new one.
+
+        The directory lock is held only for the cleanup, so a live session in the same directory makes
+        this fail (WorkingDirectoryInUseError) instead of losing its engine.
+        """
+        path = self.session_file
+        if path is None or not path.exists():
+            return []
+        self._hold_directory()
+        try:
+            return self.cleanup_recorded_session()
+        finally:
+            self._release_directory()
 
     def start(self) -> str:
         """Create the object and start an invisible CODE V session."""
@@ -574,35 +630,47 @@ class ComSession:
 
     # ------------------------------------------------------------- watchdog
 
-    def _start_startup_watchdog(self, before: dict[int, str]) -> threading.Thread | None:
+    def _start_startup_watchdog(
+        self, before: dict[int, str]
+    ) -> tuple[threading.Thread, threading.Event]:
         """Watch for a crashed engine while StartCodeV is still running.
 
         StartCodeV can block for its whole timeout when the engine dies behind a
         modal application error dialog. The watchdog kills the threadless engine
         as soon as it appears, which makes StartCodeV return and dismisses the
         dialog without anybody clicking it.
+
+        The watchdog has its own stop event that is never cleared: a scan that
+        outlasts the join in _stop_startup_watchdog still sees the stop when it
+        returns, and the event is checked again right before a kill, so a
+        watchdog that stopped late never kills an engine that started later.
         """
+        stop = threading.Event()
+
         def watch() -> None:
-            while not self._watchdog_stop.is_set():
-                time.sleep(WATCHDOG_POLL_SECONDS)
+            while not stop.wait(WATCHDOG_POLL_SECONDS):
                 for pid, name in list_codev_processes().items():
                     if name != "codevm.exe" or pid in before:
                         continue
-                    if not engine_is_alive(pid):
+                    if not engine_is_alive(pid) and not stop.is_set():
                         self._note(f"engine {pid} crashed during startup; terminating it")
                         terminate_processes([pid])
                         return
 
         thread = threading.Thread(target=watch, daemon=True)
         thread.start()
-        return thread
+        return thread, stop
 
-    def _stop_startup_watchdog(self, thread: threading.Thread | None) -> None:
-        if thread is None:
+    def _stop_startup_watchdog(
+        self, watchdog: tuple[threading.Thread, threading.Event] | None
+    ) -> None:
+        if watchdog is None:
             return
-        self._watchdog_stop.set()
+        thread, stop = watchdog
+        stop.set()
         thread.join(timeout=2 * WATCHDOG_POLL_SECONDS)
-        self._watchdog_stop.clear()
+        if thread.is_alive():
+            self._note("the startup watchdog is still finishing a process scan; it stops after it")
 
     def _discard_dead_engine(self) -> bool:
         """Kill a threadless engine recorded for this session."""
@@ -643,8 +711,7 @@ class ComSession:
         engine_pids = set(self.engine_pids)
 
         def watch() -> None:
-            while not self._watchdog_stop.is_set():
-                time.sleep(WATCHDOG_POLL_SECONDS)
+            while not self._watchdog_stop.wait(WATCHDOG_POLL_SECONDS):
                 if not any(engine_is_alive(pid) for pid in engine_pids):
                     self.engine_dead = True
                     self._note(
@@ -666,25 +733,36 @@ class ComSession:
             self._release_directory()
 
     def _stop(self) -> bool:
+        if self.closed:
+            # A second stop (the worker's shutdown and then its exit) has nothing left to release, and
+            # a second CoUninitialize would unbalance the CoInitialize of start.
+            return bool(self.cleanup_confirmed)
         self._watchdog_stop.set()
         self._watchdog = None
-        if self._object is not None:
+        # After the engine died every call on the COM server blocks (see _check_engine), StopCodeV
+        # included, so a dead session is not asked to stop: its own processes are killed first and
+        # the COM object is let go only afterwards, when nothing is left to block on.
+        engine_lost = self._engine_lost()
+        if self._object is not None and engine_lost:
+            self._note("the engine is gone; skipping StopCodeV and stopping the session's processes")
+        elif self._object is not None:
             try:
                 self._object.StopCodeV()
                 self._note("StopCodeV returned")
             except Exception as exc:  # noqa: BLE001
                 self._note(f"StopCodeV failed: {type(exc).__name__}: {exc}")
-        self._object = None
+            self._object = None
         # A session whose engine already crashed never answers StopCodeV with a
         # clean exit, so its processes are removed here rather than waited out.
         self._discard_dead_engine()
-        leftovers = self._verify_shutdown()
+        leftovers = self._verify_shutdown(wait_seconds=0 if engine_lost else 20)
         if leftovers:
             self._note(f"terminating CODE V processes left behind by StopCodeV: {leftovers}")
             safe = [pid for pid in leftovers if _matching_owned(
                 pid, self.process_identities.get(pid, {"name": self.owned_processes[pid]})) is True]
             if safe:
                 terminate_processes(safe)
+        self._object = None
         shared = shared_server_pids(self.owned_processes)
         self.shared_processes = sorted(shared)
         if shared:
@@ -706,12 +784,18 @@ class ComSession:
                 pass
         return self.cleanup_confirmed
 
-    def _verify_shutdown(self) -> list[int]:
+    def _engine_lost(self) -> bool:
+        """Whether the recorded engine is known to be gone; without a recorded engine nobody can tell."""
+        if self.engine_dead:
+            return True
+        return bool(self.engine_pids) and not any(engine_is_alive(pid) for pid in self.engine_pids)
+
+    def _verify_shutdown(self, wait_seconds: float = 20) -> list[int]:
         """Return the recorded processes that are still alive after StopCodeV."""
         if not self.owned_processes:
             return []
         alive = list_codev_processes()
-        deadline = time.time() + 20
+        deadline = time.time() + wait_seconds
         while time.time() < deadline:
             shared = shared_server_pids(self.owned_processes)
             remaining = [pid for pid in self.owned_processes if pid in alive and pid not in shared]

@@ -92,6 +92,34 @@ class OpenLens(ComBackendTestCase):
             self.backend.open_lens(str(self.root / "lens.len; del all"))
         self.assertIn("command structure", caught.exception.message)
 
+
+    def test_an_ampersand_in_the_path_is_refused(self):
+        # Unquoted, "&" continued the command onto the next one (review H3 probe).
+        with self.assertRaises(ParameterError) as caught:
+            self.backend.save_lens_as(str(self.root / "a&b.len"))
+        self.assertIn("command structure", caught.exception.message)
+
+    def test_paths_with_comment_or_macro_characters_are_quoted(self):
+        from codev_mcp.safety import command_filespec
+
+        plain = Path(r"C:\out\run-1\lens_2.len")
+        self.assertEqual(command_filespec(plain), str(plain))
+        for name in ("a!b.len", "a$b.len", "a#b.len", "a@.len", "a%b.len", "a^b.len", "a,b.len",
+                     "PROGRA~1.len", "a b.len"):
+            with self.subTest(name=name):
+                path = Path(r"C:\out") / name
+                self.assertEqual(command_filespec(path), f'"{path}"')
+
+    def test_save_as_with_an_exclamation_mark_writes_that_exact_file(self):
+        # Unquoted, CODE V read "!" as a comment and saved x!y.len as x.len, past the overwrite check.
+        self.backend.open_lens(str(self.lens_path))
+        target = self.root / "x!y.len"
+        self.backend.save_lens_as(str(target))
+        saves = [command for command in self.session.commands if command.startswith("sav ")]
+        self.assertIn(f'sav "{target}"', saves)
+        self.assertTrue(target.exists())
+        self.assertFalse((self.root / "x.len").exists())
+
     def test_open_rejects_other_suffixes(self):
         other = self.root / "lens.seq"
         other.write_text("x", encoding="utf-8")
@@ -742,6 +770,27 @@ class SessionRecovery(ComBackendTestCase):
                 backend._get_session()
         self.assertIn("engine crashed", backend._start_error or "")
 
+    def test_a_failed_start_is_refused_for_a_cooldown_then_tried_again(self):
+        """A failed start used to be refused for good while the worker lived on (review L4)."""
+        class Broken:
+            def start(self):
+                raise RuntimeError("licence server unavailable")
+
+            def stop(self):
+                pass
+
+        backend = self.make_backend([Broken(), self.session], start_attempts=1)
+        with self.assertRaises(RuntimeError):
+            backend._get_session()
+        with self.assertRaises(SessionInvalidError) as caught:
+            backend._get_session()
+        self.assertGreater(caught.exception.details["retry_after_seconds"], 0)
+        self.assertEqual(backend.session_start_seconds, 0.0)
+        backend._start_failed_at -= backend.start_retry_cooldown + 1  # the cooldown is over
+        self.assertGreater(backend.session_start_seconds, 0.0)
+        self.assertIs(backend._get_session(), self.session)
+        self.assertIsNone(backend._start_error)
+
     def test_a_working_directory_held_by_another_service_is_not_retried(self):
         from codev_mcp.com_session import WorkingDirectoryInUseError
 
@@ -827,6 +876,85 @@ class SessionRecovery(ComBackendTestCase):
                 backend.get_lens()
         self.assertFalse(any(text.startswith("res ") for text in replacement.commands))
         self.assertEqual(backend.get_status().details["lens_state"], "empty")
+
+class CommittedDrift(ComBackendTestCase):
+    """A batch never folds a lens that left its committed revision into the next one (review M6)."""
+
+    def test_an_update_on_a_lens_that_drifted_is_refused(self):
+        self.backend.open_lens(str(self.lens_path))
+        self.session.surfaces[2]["thickness"] = 7.5  # changed behind the service's back
+        sent = len(self.session.commands)
+        result = self.backend.update_lens(
+            UpdateRequest(edits=[ParameterEdit(surface=1, parameter="thickness", value=9.0)]))
+        self.assertFalse(result.outcomes[0].applied)
+        self.assertIn("committed state", result.outcomes[0].rejected_reason)
+        self.assertFalse(result.session_valid)
+        self.assertFalse([command for command in self.session.commands[sent:]
+                          if command.lower().startswith("thi")])
+        self.assertEqual(self.backend.get_status().details["lens_state"], "invalid")
+
+    def test_a_field_set_on_a_lens_that_drifted_is_refused(self):
+        from codev_mcp.models import FieldSetReplacement
+
+        self.backend.open_lens(str(self.lens_path))
+        self.session.surfaces[2]["thickness"] = 7.5
+        with self.assertRaises(SessionInvalidError):
+            self.backend.update_lens(UpdateRequest(field_set=FieldSetReplacement(
+                fields=[{"y_angle": 0.0}, {"y_angle": 5.0}])))
+        self.assertEqual(self.backend.get_status().details["lens_state"], "invalid")
+
+    def test_an_unchanged_lens_still_updates(self):
+        self.backend.open_lens(str(self.lens_path))
+        result = self.backend.update_lens(
+            UpdateRequest(edits=[ParameterEdit(surface=1, parameter="thickness", value=9.0)]))
+        self.assertTrue(result.outcomes[0].applied)
+        self.assertTrue(result.session_valid)
+
+
+class SnapshotReadErrors(ComBackendTestCase):
+    def test_an_empty_value_from_codev_is_a_checkpoint_error(self):
+        """normalise_number raised a bare ValueError, which surfaced as internal (review L9)."""
+        from codev_mcp.checkpoints import CheckpointError
+
+        self.backend.open_lens(str(self.lens_path))
+        original = self.session._evaluate_body
+        self.session._evaluate_body = lambda body: "" if body.startswith("THI S1") else original(body)
+        with self.assertRaises(CheckpointError) as caught:
+            read_snapshot(self.session, self.backend._require_lens(), self.backend._listing)
+        self.assertIn("not a number", caught.exception.details["error"])
+
+class SessionStartBudget(ComBackendTestCase):
+    """The worker tells the client how long a call that starts CODE V may take (review H1)."""
+
+    def test_the_budget_is_reported_until_the_session_runs(self):
+        from codev_mcp.com_session import session_start_budget_seconds
+
+        backend = ComBackend(working_directory=self.working, session_factory=lambda: self.session)
+        self.assertEqual(backend.session_start_seconds, session_start_budget_seconds())
+        backend._get_session()
+        self.assertEqual(backend.session_start_seconds, 0.0)
+        backend.close_session()
+        self.assertEqual(backend.session_start_seconds, 0.0)  # a closed service never starts again
+
+    def test_a_dead_engine_brings_the_budget_back(self):
+        backend = ComBackend(working_directory=self.working, session=self.session)
+        self.assertEqual(backend.session_start_seconds, 0.0)
+        self.session.engine_dead = True
+        self.assertGreater(backend.session_start_seconds, 0.0)
+
+    def test_the_budget_covers_a_lock_wait_and_every_attempt(self):
+        from codev_mcp import com_session
+
+        budget = com_session.session_start_budget_seconds()
+        self.assertGreaterEqual(
+            budget,
+            com_session.STARTUP_LOCK_WAIT_SECONDS
+            + com_session.START_ATTEMPTS * com_session.STARTUP_TIMEOUT_MS / 1000,
+        )
+
+    def test_a_backend_with_a_session_factory_leaves_leftovers_alone(self):
+        backend = ComBackend(working_directory=self.working, session_factory=lambda: self.session)
+        self.assertEqual(backend.release_leftovers(), [])
 
 
 if __name__ == "__main__":

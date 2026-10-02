@@ -439,8 +439,21 @@ def read_snapshot(session: Any, lens: Any, listing: Any = None) -> LensSnapshot:
     Every zoom position is read: a checkpoint that only covered the current zoom
     position could restore a lens whose other positions had changed. A read that
     fails or a truncated listing raises, because an incomplete read must never
-    make two different lenses compare equal.
+    make two different lenses compare equal. A value that is not a finite number
+    (CODE V answers an empty string for some items) is a checkpoint error too,
+    not an internal one.
     """
+    try:
+        return _read_snapshot(session, lens, listing)
+    except ValueError as exc:
+        raise CheckpointError(
+            "A lens value read back from CODE V was not a finite number, so the state "
+            "could not be verified.",
+            details={"error": str(exc)},
+        ) from exc
+
+
+def _read_snapshot(session: Any, lens: Any, listing: Any = None) -> LensSnapshot:
     listing_text = getattr(session, "command", lambda _text: "")("lis")
     if hasattr(session, "output_is_truncated") and session.output_is_truncated(listing_text):
         raise CheckpointError(
@@ -892,6 +905,16 @@ def compare_snapshots(
                 if requested("field", item.number, zoom.position, name):
                     continue
                 report(f"{where} {label}", left, right)
+        # The loop above walks the reference only, so a field that appeared is found here.
+        known_fields = {item.number for item in zoom.fields}
+        for item in other.fields:
+            if item.number not in known_fields:
+                problems.append(_unexpected(f"field {item.number} zoom {zoom.position}", item.number))
+
+    known_wavelengths = {item.number for item in reference.wavelengths}
+    for item in actual.wavelengths:
+        if item.number not in known_wavelengths:
+            problems.append(_unexpected(f"wavelength {item.number}", item.number))
 
     for item in reference.wavelengths:
         counterpart = next(
@@ -917,6 +940,12 @@ def compare_snapshots(
             report(f"{where} {label}", left, right)
 
     return problems
+
+def _unexpected(where: str, number: int) -> dict[str, Any]:
+    """A difference for an element the actual snapshot has and the reference does not."""
+    return {"where": where, "detail": "unexpected", "expected": "missing",
+            "actual": describe_value(number)}
+
 
 def _actual_value(
     snapshot: LensSnapshot, target: str, selector: int, zoom: int, parameter: str
@@ -1295,11 +1324,7 @@ def expectation_keys(
         zoom_state = _zoom_at(final, zoom) or (final.zooms[0] if final.zooms else None)
         if zoom_state is None:
             continue
-        surface = _surface(zoom_state, selector)
-        current = surface.glass or ""
-        catalog = current.split("_", 1)[1] if "_" in current else ""
-        if not catalog or catalog in surface.glass or True:
-            keys.append((target, selector, zoom, parameter))
+        keys.append((target, selector, zoom, parameter))
     return keys
 
 

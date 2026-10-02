@@ -145,9 +145,18 @@ class ComModeling(unittest.TestCase):
         self.backend.fault_hook = fail_publish
         with self.assertRaises(Exception):
             self.backend.create_lens(CREATE)
-        self.assertFalse(self.backend.get_status().details["session_valid"])
-        with self.assertRaises(SessionInvalidError):
-            self.backend.create_lens(CREATE)
+        # create_lens only runs on an empty session, so the failed one is dropped
+        # and the service is empty again instead of invalid (review M8).
+        details = self.backend.get_status().details
+        self.assertTrue(details["session_valid"])
+        self.assertEqual(details["lens_state"], "empty")
+        self.assertFalse(self.session.started)
+        self.backend.fault_hook = None
+        replacement = FakeCodeVSession()
+        with patch.object(self.backend, "_new_session", return_value=replacement):
+            lens = self.backend.create_lens(CREATE)
+        self.assertEqual(self.backend.get_status().details["committed_revision"], 0)
+        self.assertTrue(lens.surfaces)
 
     def test_failed_restore_invalidates_session(self):
         self.backend.create_lens(CREATE)

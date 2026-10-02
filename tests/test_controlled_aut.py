@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+import sys
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -344,6 +345,7 @@ class ControlledAutTest(unittest.TestCase):
                                expected_sha256=hash_file(self.candidate))
         self.assertEqual(self.store.load_current(self.directory).revision, 0)
 
+    @unittest.skipUnless(sys.platform == "win32", "share modes are a Windows file API")
     @mock.patch.object(aut, "_run_stage", new=lambda *args, **kwargs: {"verified": True})
     def test_revision_denies_writers_until_pointer_is_published(self):
         import win32con

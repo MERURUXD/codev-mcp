@@ -14,6 +14,7 @@ import threading
 import time
 from pathlib import Path
 
+from .com_session import session_start_budget_seconds
 
 #: How long one wait for a response lasts before the client looks for an interrupt again.
 RESPONSE_POLL_SECONDS = 0.5
@@ -26,6 +27,9 @@ class ProtocolError(RuntimeError):
 class StdioClient:
     def __init__(self, work: Path, backend: str, timeout: float, log_dir: Path):
         self.timeout = timeout
+        #: Until a lens call has succeeded, a call may first have to start CODE V; the server allows it
+        #: the start budget on top of its own timeout, so waiting less here would abandon a healthy start.
+        self.session_started = backend != "com"
         self.broken = False
         self.sequence = 0
         self.responses: queue.Queue = queue.Queue()
@@ -119,6 +123,9 @@ class StdioClient:
             raise
 
     def call(self, name: str, arguments: dict | None = None, timeout: float | None = None) -> tuple[dict, list]:
+        starts = not self.session_started and name not in ("get_status", "close_session")
+        if timeout is None and starts:
+            timeout = self.timeout + 15 + session_start_budget_seconds()
         result = self.request("tools/call", {"name": name, "arguments": arguments or {}}, timeout)
         blocks = result.get("content", [])
         texts = [block["text"] for block in blocks if block.get("type") == "text"]
@@ -126,6 +133,8 @@ class StdioClient:
             raise RuntimeError(f"{name}: {' '.join(texts)}")
         if len(texts) != 1:
             raise ProtocolError(f"{name}: expected one JSON text block")
+        if starts:
+            self.session_started = True
         return json.loads(texts[0]), [b for b in blocks if b.get("type") == "image"]
 
     def close(self) -> dict:

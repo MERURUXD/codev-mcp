@@ -13,7 +13,7 @@ import unittest
 from pathlib import Path
 
 from codev_mcp.com_backend import ComBackend
-from codev_mcp.errors import ParameterError, SessionInvalidError
+from codev_mcp.errors import ComputationError, ParameterError, SessionInvalidError
 from codev_mcp.models import (
     AnalysisKind,
     AnalysisOptions,
@@ -158,6 +158,134 @@ class Cancellation(TaskTestCase):
         # task record keeps saying that the calculation may still be running.
         self.assertEqual(self.backend.get_analysis().task.state, TaskState.RUNNING)
 
+class PollFailures(TaskTestCase):
+    """A failed poll ends the task and stops SPO before lens work resumes (review M4, M5)."""
+    session_kwargs = {"async_ticks": 3}
+
+    def test_a_parser_error_fails_the_task_and_frees_lens_work(self):
+        import unittest.mock
+
+        self.submit_spot()
+        with unittest.mock.patch.object(self.backend, "_finish_spot", side_effect=ZeroDivisionError("empty grid")):
+            for _ in range(5):
+                snapshot = self.backend.get_analysis()
+                if snapshot.task.state is not TaskState.RUNNING:
+                    break
+        self.assertEqual(snapshot.task.state, TaskState.FAILED)
+        self.assertEqual(snapshot.task.error.kind.value, "internal")
+        self.assertIn("ZeroDivisionError", snapshot.task.error.message)
+        self.assertNotIn("StopCommand", self.session.commands)  # SPO had already finished
+        self.assertIsNotNone(self.backend.get_lens())
+
+    def test_a_failed_poll_stops_the_spo_that_may_still_run(self):
+        import unittest.mock
+
+        from codev_mcp.errors import ComputationError
+
+        self.submit_spot()
+        with unittest.mock.patch.object(self.session, "wait", side_effect=ComputationError("Wait failed")):
+            snapshot = self.backend.get_analysis()
+        self.assertEqual(snapshot.task.state, TaskState.FAILED)
+        self.assertIn("StopCommand", self.session.commands)
+        self.assertTrue(self.backend._session_valid)
+        self.assertIsNotNone(self.backend.get_lens())
+
+    def test_an_unconfirmed_stop_after_a_failed_poll_invalidates_the_session(self):
+        import unittest.mock
+
+        from codev_mcp.errors import ComputationError
+
+        self.session.stop_takes_effect = False
+        self.submit_spot()
+        with unittest.mock.patch.object(self.session, "wait", side_effect=ComputationError("Wait failed")):
+            snapshot = self.backend.get_analysis()
+        self.assertEqual(snapshot.task.state, TaskState.FAILED)
+        self.assertFalse(self.backend._session_valid)
+        with self.assertRaises(SessionInvalidError):
+            self.backend.get_lens()
+
+class SpotFieldMatching(TaskTestCase):
+    """SPO statistics are taken from the requested field's own block (review M3)."""
+
+    def run_spot(self, field: int):
+        self.backend.run_analysis(AnalysisRequest(
+            kind=AnalysisKind.SPOT_DIAGRAM, options=AnalysisOptions(field_numbers=[field])))
+        for _ in range(5):
+            snapshot = self.backend.get_analysis()
+            if snapshot.task.state is not TaskState.RUNNING:
+                return snapshot
+        self.fail("the spot task did not finish")
+
+    def test_the_requested_field_is_matched_by_its_number(self):
+        snapshot = self.run_spot(2)
+        self.assertEqual(snapshot.task.state, TaskState.SUCCEEDED)
+        self.assertAlmostEqual(snapshot.spot_diagram.centroid_y, 5.3617e-04, places=8)
+
+    def test_a_field_missing_from_the_output_fails_instead_of_borrowing_another(self):
+        original = self.session._spot_statistics_listing
+        self.session._spot_statistics_listing = lambda: original().split("       Field  2,")[0]
+        snapshot = self.run_spot(2)
+        self.assertEqual(snapshot.task.state, TaskState.FAILED)
+        self.assertEqual(snapshot.task.error.kind.value, "computation_failed")
+        self.assertEqual(snapshot.task.error.details["annotated_fields"], [1])
+        self.assertIsNone(snapshot.spot_diagram)
+
+class AnalysisOptionBounds(unittest.TestCase):
+    """Analysis settings are bounded instead of silently ignored or unbounded (review M10)."""
+
+    def test_ray_grid_and_frequencies_are_bounded(self):
+        from pydantic import ValidationError
+
+        for options in ({"ray_grid": 0}, {"ray_grid": -3}, {"ray_grid": 2000},
+                        {"frequencies": [10.0, float("nan")]}, {"frequencies": [-5.0]},
+                        {"frequencies": [float("inf")]}, {"frequencies": [1.0] * 102},
+                        {"azimuth": float("nan")}):
+            with self.subTest(options=options), self.assertRaises(ValidationError):
+                AnalysisOptions.model_validate(options)
+        AnalysisOptions.model_validate({"ray_grid": 101, "frequencies": [0.0] + [1.0] * 100})
+
+    def test_misspelled_keys_are_refused_not_ignored(self):
+        """field_number instead of field_numbers silently meant every field (review L11)."""
+        from pydantic import ValidationError
+
+        for model, payload in ((AnalysisOptions, {"field_number": [2]}),
+                               (AnalysisRequest, {"kind": "mtf", "option": {}}),
+                               (UpdateRequest, {"edit": []}),
+                               (ParameterEdit, {"surface": 1, "parameter": "thickness", "value": 1, "zoom": 1})):
+            with self.subTest(model=model.__name__), self.assertRaises(ValidationError):
+                model.model_validate(payload)
+
+    def test_mtf_refuses_an_azimuth_it_would_not_use(self):
+        from codev_mcp.backend import check_mtf_azimuth
+
+        check_mtf_azimuth(None)
+        check_mtf_azimuth(0.0)  # the comparison CLIs pass 0
+        with self.assertRaises(ParameterError):
+            check_mtf_azimuth(45.0)
+
+
+class MtfNonNumeric(TaskTestCase):
+    def test_a_non_numeric_modulation_fails_instead_of_entering_the_result(self):
+        """A non-numeric COM answer became NaN, and NaN < 0 is false (review L10)."""
+        import unittest.mock
+
+        from codev_mcp.errors import ComputationError
+
+        with unittest.mock.patch.object(self.session, "mtf_1fld", return_value=(float("nan"), [])):
+            task = self.backend.run_analysis(AnalysisRequest(
+                kind=AnalysisKind.MTF, options=AnalysisOptions(frequencies=[10.0])))
+        self.assertEqual(task.state, TaskState.FAILED)
+        self.assertEqual(task.error.kind.value, ComputationError("x").kind.value)
+        self.assertIsNone(self.backend.get_analysis().mtf)
+
+
+class MtfAzimuth(TaskTestCase):
+    def test_an_mtf_with_another_azimuth_is_refused_before_it_runs(self):
+        with self.assertRaises(ParameterError) as caught:
+            self.backend.run_analysis(AnalysisRequest(
+                kind=AnalysisKind.MTF, options=AnalysisOptions(frequencies=[10.0], azimuth=45.0)))
+        self.assertIn("sagittal", caught.exception.message)
+
 class TruncatedOutput(TaskTestCase):
     """A listing that fills the text buffer is never treated as complete.
 
@@ -201,17 +329,18 @@ class TruncatedLensOpen(TaskTestCase):
         # the shared setup is expected to be refused.
         try:
             super().setUp()
-        except SessionInvalidError:
+        except ComputationError:
             self.addCleanup(self._temp.cleanup)
 
     def test_a_lens_whose_listing_is_truncated_is_refused(self):
         # setUp already tried to open the lens; the engine holds a lens that
-        # could not be verified, so the session stops instead of pretending.
+        # could not be verified, so that session is dropped instead of trusted.
+        # Nothing was open before, so the service is empty again (review M8).
         status = self.backend.get_status()
-        self.assertEqual(status.details["lens_state"], "invalid")
+        self.assertEqual(status.details["lens_state"], "empty")
         self.assertFalse(status.lens_open)
-        with self.assertRaises(SessionInvalidError):
-            self.backend.get_lens()
+        self.assertIsNone(self.backend._session)
+        self.assertTrue(self.backend._session_valid)
 
 
 class TruncatedWithoutAnnotations(TaskTestCase):

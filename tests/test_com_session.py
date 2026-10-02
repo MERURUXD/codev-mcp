@@ -9,6 +9,7 @@ output.
 from __future__ import annotations
 
 import os
+import sys
 import unittest.mock
 import unittest
 from pathlib import Path
@@ -225,6 +226,57 @@ class CleanupIdentity(unittest.TestCase):
             self.session.cleanup_recorded_session()
         self.assertTrue(self.session.session_file.exists())
 
+
+    def test_a_record_of_the_wrong_shape_is_refused_like_broken_json(self):
+        from codev_mcp.errors import SessionInvalidError
+        for content in ("[1, 2]", '{"processes": {"not-a-pid": "codevm.exe"}}', '{"processes": [1]}'):
+            with self.subTest(content=content):
+                self.session.session_file.write_text(content, encoding="utf-8")
+                with self.assertRaises(SessionInvalidError):  # review L2
+                    self.session.cleanup_recorded_session()
+                self.assertTrue(self.session.session_file.exists())
+
+    def test_a_second_stop_releases_nothing_twice(self):
+        from codev_mcp import com_session
+
+        class Pythoncom:
+            calls = 0
+
+            def CoUninitialize(self):
+                Pythoncom.calls += 1
+
+        self.session._pythoncom = Pythoncom()
+        with (self.mock.patch.object(self.session, "_verify_shutdown", return_value=[]),
+              self.mock.patch.object(com_session, "_identity", return_value=None)):
+            self.assertTrue(self.session.stop())
+            self.assertTrue(self.session.stop())  # review L12
+        self.assertEqual(Pythoncom.calls, 1)
+
+
+    def test_a_record_without_a_start_time_is_released_once_its_pid_is_reused(self):
+        """Without created_at every later start was refused, even after the pid was reused (review L1)."""
+        from codev_mcp import com_session
+        from codev_mcp.errors import SessionInvalidError
+
+        self.session.process_identities = {}
+        self.session._record_session()  # the record now carries the name only
+        with (self.mock.patch.object(com_session, "_identity", return_value={
+                "name": "notepad.exe", "created_at": 5.0}),
+              self.mock.patch.object(com_session, "terminate_processes") as kill):
+            self.assertEqual(self.session.cleanup_recorded_session(), [])
+        kill.assert_not_called()
+        self.assertFalse(self.session.session_file.exists())
+
+        self.session._record_session()
+        with (self.mock.patch.object(com_session, "_identity", return_value={
+                "name": "codevm.exe", "created_at": 5.0}),
+              self.mock.patch.object(com_session, "terminate_processes") as kill):
+            with self.assertRaises(SessionInvalidError) as caught:
+                self.session.cleanup_recorded_session()
+        kill.assert_not_called()  # the same name may still be ours: never killed blindly
+        self.assertIn("taskkill", caught.exception.hint)
+        self.assertTrue(self.session.session_file.exists())
+
     def test_recorded_leftover_can_be_retried_after_verified_kill(self):
         from codev_mcp import com_session
         current = {"name": "codevm.exe", "created_at": 100.0}
@@ -247,6 +299,26 @@ class CleanupIdentity(unittest.TestCase):
             self.assertEqual(self.session.cleanup_recorded_session(), [])
         kill.assert_not_called()
         self.assertFalse(self.session.session_file.exists())
+
+
+    def test_release_leftovers_cleans_a_record_without_starting_and_frees_the_directory(self):
+        """A replacement worker stops what a killed worker left before any lens call (review H1)."""
+        from codev_mcp import com_session
+        current = {"name": "codevm.exe", "created_at": 100.0}
+
+        def kill(_pids):
+            nonlocal current
+            current = None
+            return []
+
+        fresh = ComSession(starting_directory=self.temp.name)
+        with (self.mock.patch.object(com_session, "_identity", side_effect=lambda _pid: current),
+              self.mock.patch.object(com_session, "terminate_processes", side_effect=kill)):
+            self.assertEqual(fresh.release_leftovers(), [987654321])
+        self.assertFalse(fresh.session_file.exists())
+        self.assertIsNone(fresh._directory_lock)
+        self.assertFalse(fresh.started)
+        self.assertEqual(fresh.release_leftovers(), [])  # nothing recorded any more
 
 
 class SharedComServer(unittest.TestCase):
@@ -367,6 +439,107 @@ class EngineLiveness(unittest.TestCase):
             self.assertFalse(com_session.engine_is_alive(999999))
 
 
+    def test_access_denied_is_not_taken_for_a_dead_engine(self):
+        from codev_mcp import com_session
+
+        class AccessDenied(Exception):
+            pass
+
+        fake = unittest.mock.Mock(STATUS_ZOMBIE="zombie", AccessDenied=AccessDenied)
+        fake.Process.side_effect = AccessDenied("denied")
+        with unittest.mock.patch.object(com_session, "_psutil", return_value=fake):
+            self.assertTrue(com_session.engine_is_alive(1234))
+
+
+    def test_stop_skips_stop_codev_once_the_engine_is_gone(self):
+        """StopCodeV on a dead engine blocks; the processes are killed and nothing waits (review M1)."""
+        from codev_mcp import com_session
+
+        class Blocking:
+            def StopCodeV(self):
+                raise AssertionError("StopCodeV must not be called on a dead engine")
+
+        session = ComSession()
+        session._object = Blocking()
+        session.engine_pids = {11}
+        session.owned_processes = {11: "codevm.exe", 12: "cvcommand.exe"}
+        session.process_identities = {pid: {"name": name, "created_at": 1.0}
+                                      for pid, name in session.owned_processes.items()}
+        session.engine_dead = True
+        live = {12: "cvcommand.exe"}
+        killed: list[list[int]] = []
+
+        def kill(pids):
+            killed.append(list(pids))
+            for pid in pids:
+                live.pop(pid, None)
+            return []
+
+        with (unittest.mock.patch.object(com_session, "list_codev_processes", side_effect=lambda: dict(live)),
+              unittest.mock.patch.object(com_session, "_identity",
+                                         side_effect=lambda pid: {"name": live[pid], "created_at": 1.0}
+                                         if pid in live else None),
+              unittest.mock.patch.object(com_session, "engine_is_alive", return_value=False),
+              unittest.mock.patch.object(com_session, "terminate_processes", side_effect=kill),
+              unittest.mock.patch.object(com_session.time, "sleep",
+                                         side_effect=AssertionError("a dead engine is not waited for"))):
+            self.assertTrue(session.stop())
+        self.assertEqual(killed, [[12]])
+        self.assertFalse(session.started)
+
+
+class StartupWatchdog(unittest.TestCase):
+    """A stopped startup watchdog must never kill afterwards, even when a scan outlasts the join (review H2)."""
+
+    def test_a_slow_scan_still_stops_and_never_kills_afterwards(self):
+        import threading
+        import time
+
+        from codev_mcp import com_session
+
+        scans: list[float] = []
+        scanning = threading.Event()
+
+        def slow_scan():
+            scans.append(time.monotonic())
+            scanning.set()
+            time.sleep(0.4)  # longer than the join in _stop_startup_watchdog
+            return {77: "codevm.exe"}
+
+        with (unittest.mock.patch.object(com_session, "WATCHDOG_POLL_SECONDS", 0.05),
+              unittest.mock.patch.object(com_session, "list_codev_processes", side_effect=slow_scan),
+              unittest.mock.patch.object(com_session, "engine_is_alive", return_value=False),
+              unittest.mock.patch.object(com_session, "terminate_processes") as kill):
+            session = ComSession()
+            watchdog = session._start_startup_watchdog({})
+            self.assertTrue(scanning.wait(2))
+            session._stop_startup_watchdog(watchdog)
+            self.assertTrue(watchdog[0].is_alive())  # still inside the scan
+            watchdog[0].join(2)
+        self.assertFalse(watchdog[0].is_alive())
+        kill.assert_not_called()
+        self.assertEqual(len(scans), 1)
+        self.assertFalse(session._watchdog_stop.is_set())  # the session watchdog's event is untouched
+
+    def test_a_crashed_engine_is_still_killed_while_starting(self):
+        import threading
+
+        from codev_mcp import com_session
+
+        killed = threading.Event()
+        with (unittest.mock.patch.object(com_session, "WATCHDOG_POLL_SECONDS", 0.01),
+              unittest.mock.patch.object(com_session, "list_codev_processes",
+                                         return_value={5: "codevm.exe", 77: "codevm.exe"}),
+              unittest.mock.patch.object(com_session, "engine_is_alive", side_effect=lambda pid: pid != 77),
+              unittest.mock.patch.object(com_session, "terminate_processes",
+                                         side_effect=lambda pids: killed.set()) as kill):
+            session = ComSession()
+            watchdog = session._start_startup_watchdog({5: "codevm.exe"})
+            self.assertTrue(killed.wait(2))
+            session._stop_startup_watchdog(watchdog)
+        kill.assert_called_once_with([77])
+
+
 class CrashedEngineDetection(unittest.TestCase):
     def make_session(self) -> ComSession:
         session = ComSession()
@@ -410,6 +583,7 @@ class CrashedEngineDetection(unittest.TestCase):
             com_session.engine_is_alive = original
 
 
+@unittest.skipUnless(sys.platform == "win32", "the startup mutex exists on Windows only")
 class StartupLock(unittest.TestCase):
     """Sessions start one at a time, so each one's process record holds only its own processes (F7)."""
     def test_a_second_start_waits_until_the_first_has_finished(self):
@@ -494,6 +668,7 @@ class StartupLock(unittest.TestCase):
         self.assertEqual(order, ["lock", "engine", "unlock"])
 
 
+@unittest.skipUnless(sys.platform == "win32", "the directory lock exists on Windows only")
 class SharedWorkingDirectory(unittest.TestCase):
     """Two services on one working directory: the later start must not clean up the live session."""
 

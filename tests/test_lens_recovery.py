@@ -322,6 +322,24 @@ class SnapshotComparison(unittest.TestCase):
             ["native solves"],
         )
 
+
+    def test_fields_and_wavelengths_that_appeared_are_reported(self):
+        """The comparison walked the reference only, so an extra field passed (review M7)."""
+        from codev_mcp.checkpoints import FieldState
+
+        before = self.snapshot()
+        before.zooms[0].fields = [FieldState(number=1, x_angle=0.0, y_angle=0.0, weight=1.0)]
+        after = self.snapshot()
+        after.zooms[0].fields = [FieldState(number=1, x_angle=0.0, y_angle=0.0, weight=1.0),
+                                 FieldState(number=2, x_angle=0.0, y_angle=7.0, weight=1.0)]
+        after.wavelengths.append(WavelengthState(number=2, micrometers=0.4861, weight=1.0))
+        problems = compare_snapshots(before, after)
+        self.assertEqual([item["where"] for item in problems], ["field 2 zoom 1", "wavelength 2"])
+        self.assertEqual({item["detail"] for item in problems}, {"unexpected"})
+        reverse = [item["where"] for item in compare_snapshots(after, before)]
+        self.assertIn("wavelength 2", reverse)
+        self.assertTrue(any(where.startswith("field 2 zoom 1") for where in reverse))
+
     def test_a_round_trip_difference_is_not_reported(self):
         self.assertEqual(
             compare_snapshots(self.snapshot(thickness=5.0), self.snapshot(thickness=5.0000000000000004)),
@@ -623,23 +641,56 @@ class FirstOpenFails(unittest.TestCase):
         self.session = fresh_session()
         self.backend = ComBackend(working_directory=self.working, session=self.session)
 
-    def test_a_first_open_that_cannot_be_published_stops_the_session(self):
+    def test_a_first_open_that_cannot_be_published_returns_to_an_empty_session(self):
         original = self.backend._save_lens_file
 
         def failing_save(session, path, action):
             raise RuntimeError("the engine refused to save the lens")
 
         self.backend._save_lens_file = failing_save
-        self.addCleanup(lambda: setattr(self.backend, "_save_lens_file", original))
+        with self.assertRaises(ComputationError) as caught:
+            self.backend.open_lens(str(self.lens_path))
+        self.assertEqual(caught.exception.details["lens_state"], "empty")
+        # Nothing established a checkpoint, so the engine that may hold a partly
+        # loaded lens is dropped; nothing was open, so the service is empty again
+        # instead of refusing every later call (review M8).
+        self.assertEqual(self.backend._lens_state.name, "EMPTY")
+        self.assertIsNone(self.backend._committed_revision)
+        self.assertIsNone(self.backend._session)
+        self.assertFalse(self.session.started)
+        self.assertEqual(self.backend.get_status().details["lens_state"], "empty")
+        replacement = fresh_session()
+        self.backend._session_factory = lambda: replacement
+        self.backend._save_lens_file = original
+        self.assertTrue(self.backend.open_lens(str(self.lens_path)).surfaces)
+        self.assertEqual(self.backend.get_status().details["lens_state"], "ready")
+
+    def test_an_unconfirmed_release_of_the_dropped_session_still_invalidates(self):
+        def failing_save(session, path, action):
+            raise RuntimeError("the engine refused to save the lens")
+
+        self.backend._save_lens_file = failing_save
+        self.session.stop = lambda: False
         with self.assertRaises(SessionInvalidError):
             self.backend.open_lens(str(self.lens_path))
-        # Nothing established a checkpoint, so the engine may hold a partly
-        # loaded lens and no operation may trust it.
-        self.assertEqual(self.backend._lens_state.name, "INVALID")
-        self.assertIsNone(self.backend._committed_revision)
-        with self.assertRaises(SessionInvalidError):
-            self.backend.get_lens()
         self.assertEqual(self.backend.get_status().details["lens_state"], "invalid")
+
+class InterruptedBatchReport(BackendTestCase):
+    def test_the_report_of_an_interrupted_batch_matches_the_recovery(self):
+        """The warning said writes stay refused, yet the next call restores and accepts them (review L3)."""
+        def interrupt(name: str) -> None:
+            if name == "before_edit_command":
+                raise RuntimeError("injected interruption")
+
+        self.backend.fault_hook = interrupt
+        result = self.backend.update_lens(thickness_edit(9.5))
+        self.assertFalse(result.session_valid)
+        self.assertTrue(any("restores the lens" in warning for warning in result.warnings))
+        self.assertFalse(any("restart the service" in warning for warning in result.warnings))
+        self.backend.fault_hook = None
+        retried = self.backend.update_lens(thickness_edit(9.5))
+        self.assertTrue(retried.outcomes[0].applied)
+
 
 class CommittedUpdate(BackendTestCase):
     def test_a_successful_update_raises_the_committed_revision(self):
@@ -1719,9 +1770,10 @@ class StaleVignettingItems(unittest.TestCase):
         original = session._evaluate_body
         session._evaluate_body = lambda body: None if body.startswith("VLY") else original(body)
         backend = ComBackend(working_directory=root / "run", session=session)
-        with self.assertRaises(SessionInvalidError) as caught:
+        with self.assertRaises(ComputationError) as caught:
             backend.open_lens(str(lens_path))
         self.assertIn("vignetting", json.dumps(caught.exception.details))
+        self.assertEqual(backend.get_status().details["lens_state"], "empty")
 
     def test_a_format_five_checkpoint_is_refused_with_a_vignetting_hint(self):
         temp = workspace_temp_directory("store-five")

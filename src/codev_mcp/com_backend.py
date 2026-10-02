@@ -35,6 +35,7 @@ import struct
 import sys
 import threading
 import time
+import traceback
 import uuid
 import zlib
 from dataclasses import dataclass
@@ -49,6 +50,7 @@ from . import plotting
 from .backend import (
     COM_BACKEND,
     Backend,
+    check_mtf_azimuth,
     check_native_plot_options,
     check_wavefront_options,
     default_working_directory,
@@ -80,12 +82,15 @@ from .checkpoints import (
     summarise,
     utc_now,
 )
-from .com_session import ERROR_LINE, ComSession, WorkingDirectoryInUseError, engine_is_alive
+from .com_session import (ERROR_LINE, START_ATTEMPTS, START_RETRY_COOLDOWN_SECONDS, START_RETRY_DELAY_SECONDS,
+                          ComSession,
+                          WorkingDirectoryInUseError, engine_is_alive, session_start_budget_seconds)
 from .errors import (
     CodeVError,
     ComputationError,
     ErrorInfo,
     ErrorKind,
+    InternalError,
     NotReadyError,
     ParameterError,
     SessionInvalidError,
@@ -242,13 +247,6 @@ PUPIL_MAP_TOLERANCE = 0.005
 POLL_WAIT_SECONDS = 5
 CANCEL_CONFIRM_SECONDS = 10
 
-#: CODE V starts its windowless engine unreliably on this machine: the engine
-#: sometimes dies behind an application error dialog before StartCodeV returns.
-#: The failure is transient, so the session is retried a few times, each time
-#: after the crashed processes have been cleaned up.
-START_ATTEMPTS = 4
-START_RETRY_DELAY_SECONDS = 3.0
-
 
 class LensState(str, Enum):
     """How far the lens inside the engine may be trusted.
@@ -370,6 +368,9 @@ class ComBackend(Backend):
         self._session = session
         self._session_factory = session_factory
         self._start_error: str | None = None
+        self._start_failed_at: float | None = None
+        #: How long a start that failed every attempt is refused before it may be tried again.
+        self.start_retry_cooldown = START_RETRY_COOLDOWN_SECONDS
         self._session_valid = True
         #: How many times the session had to be rebuilt after the engine died.
         self.session_restarts = 0
@@ -476,15 +477,31 @@ class ComBackend(Backend):
             raise NotReadyError(
                 "The session was closed; restart the service to open a new one.",
             )
-        if self._start_error is not None:
+        if self._start_refused():
             raise SessionInvalidError(
                 f"The CODE V session could not be started: {self._start_error}",
-                hint="Fix the reported problem and restart the service.",
+                details={"retry_after_seconds": round(self._start_retry_wait(), 1)},
+                hint="Fix the reported problem; a new start is tried once the wait is over.",
             )
+        self._start_error = None
         session, version = self._start_session_with_retries()
         self._session = session
         self.log(f"CODE V session started, version {version}")
         return session
+
+    def _start_retry_wait(self) -> float:
+        """Seconds until a failed start may be tried again; 0 when no start failed."""
+        if self._start_error is None or self._start_failed_at is None:
+            return 0.0
+        return max(0.0, self.start_retry_cooldown - (time.monotonic() - self._start_failed_at))
+
+    def _start_refused(self) -> bool:
+        """A start failed every attempt a moment ago (for example the licence server was away).
+
+        Retrying at once would only burn another round of attempts, but refusing for good would
+        leave a live worker that the server never replaces, so the refusal lasts a cooldown.
+        """
+        return self._start_error is not None and self._start_retry_wait() > 0
 
     @staticmethod
     def _session_is_dead(session: Any) -> bool:
@@ -557,6 +574,38 @@ class ComBackend(Backend):
             session.stop()
         except Exception as exc:  # noqa: BLE001 - discarding must not fail the call
             self.log(f"could not stop the dead session: {type(exc).__name__}: {exc}")
+
+    def _discard_session_back_to_empty(self, reason: str) -> bool:
+        """Drop a session that held no lens before a failed first open or create.
+
+        The engine may now hold a half built lens that no checkpoint describes,
+        but a new session starts empty, so the service returns to EMPTY instead of
+        refusing every later call. False when the release of the old processes
+        could not be confirmed; the caller then marks the session invalid.
+        """
+        session, self._session = self._session, None
+        self._lens_state = LensState.EMPTY
+        self._session_valid = True
+        self._lens_open = False
+        self._lens = None
+        self._listing = None
+        self._lens_id = None
+        self._lens_directory = None
+        self._committed_revision = None
+        self._last_known_snapshot = None
+        self._source_path = None
+        self._reload_required = False
+        self.log(f"discarding the session to return to an empty lens state: {reason}")
+        if session is None:
+            return True
+        try:
+            released = session.stop() is not False
+        except Exception as exc:  # noqa: BLE001 - an unconfirmed release decides below
+            self.log(f"could not stop the discarded session: {type(exc).__name__}: {exc}")
+            released = False
+        if not released:
+            self._invalidate_lens(f"{reason}; the discarded session's processes were not confirmed released")
+        return released
 
     def _invalidate_lens(self, reason: str) -> None:
         """Mark the session unusable for lens work and say why."""
@@ -1147,6 +1196,7 @@ class ComBackend(Backend):
                 if attempt < attempts:
                     time.sleep(START_RETRY_DELAY_SECONDS)
         self._start_error = f"{type(last_error).__name__}: {last_error}"
+        self._start_failed_at = time.monotonic()
         raise last_error
 
     def _require_session(self) -> Any:
@@ -1190,6 +1240,25 @@ class ComBackend(Backend):
     def stop(self) -> None:
         if self._session is not None:
             self._session.stop()
+
+    @property
+    def session_start_seconds(self) -> float:
+        """The start budget while the next lens call would have to start CODE V, else 0."""
+        if self._closed or self._start_refused():
+            return 0.0
+        session = self._session
+        if session is not None and not self._session_is_dead(session):
+            return 0.0
+        return session_start_budget_seconds(self.start_attempts)
+
+    def release_leftovers(self) -> list[int]:
+        """Stop the recorded processes of a worker that was killed, so they stop holding a licence.
+
+        A replacement worker otherwise leaves them running until its first lens call starts a session.
+        """
+        if self._session is not None or self._session_factory is not None:
+            return []
+        return ComSession(starting_directory=self.working_directory, log=self.log).release_leftovers()
 
     def capabilities(self) -> list[CapabilityInfo]:
         return [
@@ -1407,15 +1476,22 @@ class ComBackend(Backend):
                 directory, lens_id, 0, candidate, restored, source_path=None,
             )
         except Exception as exc:
-            self._lens_state = LensState.INVALID
-            self._session_valid = False
-            self._lens_open = False
-            self._lens = None
+            # create_lens only runs on an empty session, so dropping the engine loses
+            # nothing and the next call starts an empty one; only a release that
+            # cannot be confirmed leaves the session invalid.
+            reset = self._discard_session_back_to_empty(
+                f"creating a lens failed ({type(exc).__name__}: {getattr(exc, 'message', exc)})")
+            if not reset:
+                self._lens_state = LensState.INVALID
+                self._session_valid = False
+                self._lens_open = False
+                self._lens = None
             if isinstance(exc, CodeVError):
                 raise
             raise ComputationError(
                 "The new lens could not be verified or checkpointed.",
-                details={"error": f"{type(exc).__name__}: {exc}"},
+                details={"error": f"{type(exc).__name__}: {exc}",
+                         "lens_state": self._lens_state.value},
             ) from exc
         self._committed_revision = 0
         self._last_known_snapshot = restored
@@ -1645,6 +1721,22 @@ class ComBackend(Backend):
                     "error": f"{type(exc).__name__}: {message}",
                 },
             ) from exc
+        if (revision is None or directory is None) and state is LensState.EMPTY:
+            # Nothing was open, so nothing is lost by dropping the engine that may
+            # hold a half loaded lens: the next call starts an empty session.
+            if self._discard_session_back_to_empty(f"opening {source} failed ({message})"):
+                raise ComputationError(
+                    "The lens could not be opened; the CODE V session was discarded and "
+                    "the next call starts a new, empty one.",
+                    details={
+                        "path": str(source),
+                        "source_sha256": source_hash,
+                        "error": f"{type(exc).__name__}: {message}",
+                        "lens_state": LensState.EMPTY.value,
+                    },
+                    raw_output=getattr(exc, "raw_output", None),
+                    hint="Check the lens file, then call open_lens or create_lens again.",
+                ) from exc
         if revision is None or directory is None:
             # The lens inside the engine may be half initialised and no committed
             # checkpoint can describe it, so the session stops here.
@@ -2452,8 +2544,9 @@ class ComBackend(Backend):
                 session_valid=False,
                 warnings=warnings
                 + [
-                    "No further write is accepted in this session; restart the service "
-                    "to establish a new trusted lens."
+                    "This batch was not applied. The next call restores the lens from its "
+                    f"last committed checkpoint (revision {self._committed_revision}) and "
+                    "accepts writes again once that restore is verified."
                 ],
             )
 
@@ -2463,6 +2556,13 @@ class ComBackend(Backend):
         if self._field_kind() not in {None, "angle"}:
             return f"This lens defines fields as {self._field_kind()}; only angle fields can be replaced."
         return None
+
+    def _committed_drift(self, snapshot: LensSnapshot) -> list[dict[str, Any]]:
+        """Differences between the live lens and its last committed state; none when that is unknown."""
+        trusted = self._last_known_snapshot
+        if trusted is None:
+            return []
+        return compare_snapshots(trusted, snapshot)
 
     def _replace_field_set(self, spec: FieldSetReplacement) -> UpdateResult:
         """Replace the field set as one verified transaction.
@@ -2494,6 +2594,11 @@ class ComBackend(Backend):
             )
         directory = self._require_lens_directory()
         before = read_snapshot(session, lens, self._listing)
+        drift = self._committed_drift(before)
+        if drift:
+            self._invalidate_lens("the live lens differs from its last committed state before a field set")
+            raise SessionInvalidError("The lens changed outside its committed checkpoint.",
+                                      details={"changes": drift})
         self._restore_seq += 1
         restore_name = f"rp-{self._restore_seq:04d}"
         transaction_id = self._next_transaction_id()
@@ -2693,6 +2798,35 @@ class ComBackend(Backend):
                 rolled_back=True,
                 session_valid=False,
                 warnings=warnings,
+            )
+        drift = self._committed_drift(pre_snapshot)
+        if drift:
+            # A lens that already moved away from its committed revision would be folded into the
+            # next revision and pass verification, because the batch only compares its own before
+            # and after; the same rule as structure edits and WAV refuses it instead.
+            self._invalidate_lens("the live lens differs from its last committed state before an update")
+            return UpdateResult(
+                source=self.source,
+                outcomes=[
+                    EditOutcome(
+                        edit=plan.edit,
+                        applied=False,
+                        previous_value=plan.previous,
+                        new_value=None,
+                        rejected_reason=(
+                            "No parameter was changed: the live lens differs from its last "
+                            f"committed state ({summarise(drift)})."
+                        ),
+                    )
+                    for plan in plans
+                ],
+                restore_point=restore_name,
+                rolled_back=False,
+                session_valid=False,
+                warnings=warnings + [
+                    "The session is marked invalid because the lens changed outside its committed "
+                    "checkpoint; no write is accepted until the service is restarted."
+                ],
             )
         self._last_known_snapshot = pre_snapshot
         record["before_sha256"] = self._snapshot_checksum(pre_snapshot)
@@ -3399,10 +3533,14 @@ class ComBackend(Backend):
         self._require_session()
         if self._task is not None and self._task.state is TaskState.RUNNING:
             if self._pending_spot is not None:
+                pending_spot = self._pending_spot
                 try:
                     finished = self._advance_spot()
-                except CodeVError as exc:
-                    self._fail_task(exc)
+                except Exception as exc:  # noqa: BLE001 - every poll failure ends the task
+                    error = self._poll_error(exc)
+                    # The poll failed, not necessarily SPO: stop it before lens work may resume.
+                    self._abandon_spot(pending_spot, error.message)
+                    self._fail_task(error)
                 else:
                     if finished:
                         self._task.state = TaskState.SUCCEEDED
@@ -3412,12 +3550,13 @@ class ComBackend(Backend):
                 pending = self._pending_native_plot
                 try:
                     finished = self._advance_native_plot()
-                except CodeVError as exc:
+                except Exception as exc:  # noqa: BLE001 - every poll failure ends the task
                     # The poll itself failed, so the option may still be running
                     # and its plot file is still open: the graphics state is
                     # recovered before the task is failed.
-                    self._abandon_native_plot(pending, exc.message)
-                    self._fail_task(exc)
+                    error = self._poll_error(exc)
+                    self._abandon_native_plot(pending, error.message)
+                    self._fail_task(error)
                 else:
                     if finished:
                         self._task.state = TaskState.SUCCEEDED
@@ -3461,6 +3600,42 @@ class ComBackend(Backend):
                 snapshot.native_plot = self._analysis_payload.get("native_plot")
                 snapshot.wavefront = self._analysis_payload.get("wavefront")
         return snapshot
+
+    def _poll_error(self, exc: Exception) -> CodeVError:
+        """The structured error a failed poll is recorded with.
+
+        A parser or arithmetic error is not a CodeVError, but it must still end the task: a task left
+        running would refuse every lens operation until somebody thought of cancel_analysis.
+        """
+        if isinstance(exc, CodeVError):
+            return exc
+        self.log("analysis poll failed:\n" + traceback.format_exc())
+        return InternalError(
+            f"Reading the analysis result failed: {type(exc).__name__}: {exc}",
+            hint="The task was ended; run the analysis again or check the service log.",
+        )
+
+    def _abandon_spot(self, pending: dict[str, Any], reason: str) -> None:
+        """Stop an SPO option whose poll failed while it may still be running; never raises.
+
+        Lens work sends commands, which must not happen while an asynchronous command runs, so a stop
+        that CODE V does not confirm marks the session invalid. A dead engine is left to the rebuild.
+        """
+        if pending.get("finished"):
+            return
+        session = self._session
+        if session is None or self._session_is_dead(session):
+            return
+        try:
+            session.stop_command()
+            stopped = self._wait_for_stop(session)
+        except Exception as exc:  # noqa: BLE001 - the task still has to reach a final state
+            self.log(f"spot diagram: the stop after a failed poll was refused ({exc})")
+            stopped = False
+        if not stopped:
+            self._invalidate_lens(
+                f"the spot diagram poll failed ({reason}) and CODE V did not confirm that SPO stopped"
+            )
 
     def cancel_analysis(self) -> TaskInfo | None:
         self._require_session()
@@ -3565,6 +3740,7 @@ class ComBackend(Backend):
                     "The first release supports the diffraction sine wave MTF only.",
                     details={"requested": options.mtf_type.value},
                 )
+            check_mtf_azimuth(options.azimuth)
 
         if request.kind is AnalysisKind.SPOT_DIAGRAM:
             if options.field_numbers and len(field_numbers) != 1:
@@ -3946,6 +4122,7 @@ class ComBackend(Backend):
             if self._task is not None:
                 self._task.progress = f"SPO is still running ({elapsed:.0f} seconds)."
             return False
+        pending["finished"] = True
         # The output has to be fetched before any call that could reset it.
         listing_text = session.get_command_output()
         truncated = session.output_is_truncated(listing_text)
@@ -3992,13 +4169,19 @@ class ComBackend(Backend):
                 raw_output=listing_text,
                 hint="Check the SPO output settings in CODE V.",
             )
-        index = min(field_number - 1, len(spot.fields) - 1)
-        if field_number - 1 >= len(spot.fields):
-            warnings.append(
-                f"The SPO listing only annotated {len(spot.fields)} field(s); the values "
-                f"of field {index + 1} are reported for field {field_number}."
+        # Matched by the field number SPO printed, never by position: the values of
+        # another field must not be reported under the requested one.
+        statistic = next((item for item in spot.fields if item.index == field_number), None)
+        if statistic is None:
+            raise ComputationError(
+                f"The SPO output did not annotate field {field_number}, so its native "
+                "statistics could not be read.",
+                details={"field": field_number,
+                         "annotated_fields": [item.index for item in spot.fields],
+                         "output_truncated": truncated},
+                raw_output=listing_text,
+                hint="Check the SPO output settings in CODE V, or run the spot diagram again.",
             )
-        statistic = spot.fields[index]
         if statistic.rms_diameter is None:
             raise ComputationError(
                 "The SPO listing did not contain an RMS spot size.",
@@ -4676,7 +4859,7 @@ class ComBackend(Backend):
                 modulation_t, values_t = session.mtf_1fld(
                     zoom, field_number, frequency, 0.0, nrd, MTF_TYPE_DIF, MTF_TYPE_SINE
                 )
-                if modulation_t < 0:
+                if not math.isfinite(modulation_t) or modulation_t < 0:
                     raise ComputationError(
                         "MTF_1FLD reported a failed calculation.",
                         details={
@@ -4689,7 +4872,7 @@ class ComBackend(Backend):
                 modulation_s, values_s = session.mtf_1fld(
                     zoom, field_number, frequency, 90.0, nrd, MTF_TYPE_DIF, MTF_TYPE_SINE
                 )
-                if modulation_s < 0:
+                if not math.isfinite(modulation_s) or modulation_s < 0:
                     raise ComputationError(
                         "MTF_1FLD reported a failed calculation.",
                         details={

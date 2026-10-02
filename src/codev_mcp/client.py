@@ -22,11 +22,15 @@ from .worker import PROTOCOL_VERSION
 
 _SRC_ROOT = Path(__file__).resolve().parent.parent
 
-DEFAULT_TIMEOUT_SECONDS = 300.0
-#: The first ping covers worker start plus the CODE V session start, and
-#: StartCodeV alone was measured at about two minutes on this machine, so the
-#: handshake gets its own, longer bound than a regular tool call.
+#: Longer than one CODE V command may run (com_session.DEFAULT_COMMAND_TIMEOUT_MS), so a slow
+#: command ends with CODE V's own timeout and a structured error instead of a killed worker.
+DEFAULT_TIMEOUT_SECONDS = 660.0
+#: The handshake covers the worker process start and its imports only; CODE V is
+#: started by the first lens call, which gets the start budget the worker reports.
 STARTUP_TIMEOUT_SECONDS = 300.0
+#: A shutdown runs StopCodeV, waits up to 20 s for the processes to exit and kills what is left
+#: (5 s each); a worker killed half way leaves processes and the session record behind.
+SHUTDOWN_TIMEOUT_SECONDS = 120.0
 
 
 class WorkerClient:
@@ -56,6 +60,8 @@ class WorkerClient:
         self.last_error: ErrorInfo | None = None
         self.session_invalid = False
         self.aborted = False
+        #: Extra seconds the next call may need to start the CODE V session, as the worker last reported.
+        self.session_start_seconds = 0.0
 
     # -------------------------------------------------------------- lifecycle
 
@@ -151,7 +157,7 @@ class WorkerClient:
             return
         if process.poll() is None:
             try:
-                self.call("shutdown", timeout=30.0)
+                self.call("shutdown", timeout=SHUTDOWN_TIMEOUT_SECONDS)
             except Exception:  # noqa: BLE001 - closing must not raise
                 pass
         if process.poll() is None and terminate:
@@ -188,7 +194,7 @@ class WorkerClient:
         with self._lock:
             self._next_id += 1
             request_id = self._next_id
-            deadline = self.timeout if timeout is None else timeout
+            deadline = self.timeout + self.session_start_seconds if timeout is None else timeout
             payload = json.dumps(
                 {"id": request_id, "method": method, "params": params or {}}
             )
@@ -239,6 +245,9 @@ class WorkerClient:
                 raise self._not_ready(
                     message, details={"method": method, "line": line[:500]}
                 )
+            budget = response.get("session_start_seconds")
+            if isinstance(budget, (int, float)) and not isinstance(budget, bool) and 0 <= budget < float("inf"):
+                self.session_start_seconds = float(budget)
 
         if response.get("ok"):
             return response.get("result")

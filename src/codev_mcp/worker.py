@@ -114,7 +114,12 @@ def handle_request(backend: Backend, request: dict[str, Any]) -> dict[str, Any]:
             },
         }
     if method == "shutdown":
-        backend.stop()
+        try:
+            backend.stop()
+        except Exception as exc:  # noqa: BLE001 - the worker still answers and exits
+            log("shutdown failed:\n" + traceback.format_exc())
+            info = InternalError(f"Stopping the backend failed: {type(exc).__name__}: {exc}").to_info()
+            return {"id": request_id, "ok": False, "error": info.model_dump(mode="json")}
         return {"id": request_id, "ok": True, "result": {"stopped": True}}
     if method not in HANDLERS:
         return {
@@ -146,6 +151,19 @@ def handle_request(backend: Backend, request: dict[str, Any]) -> dict[str, Any]:
     return {"id": request_id, "ok": True, "result": payload}
 
 
+def _session_start_seconds(backend: Backend) -> float:
+    """Tell the client how much longer than usual the next call may take to start a session.
+
+    Without it the client would time out a first lens call that is still starting CODE V and kill
+    the worker, leaving CODE V processes that hold a licence behind.
+    """
+    try:
+        return float(backend.session_start_seconds)
+    except Exception as exc:  # noqa: BLE001 - a hint must never cost the response
+        log(f"could not read the session start budget: {type(exc).__name__}: {exc}")
+        return 0.0
+
+
 def serve(backend: Backend, stdin: TextIO, stdout: TextIO) -> int:
     log(f"worker ready: backend={backend.name} protocol={PROTOCOL_VERSION}")
     for line in stdin:
@@ -168,7 +186,15 @@ def serve(backend: Backend, stdin: TextIO, stdout: TextIO) -> int:
             stdout.flush()
             continue
 
+        if not isinstance(request, dict):
+            # Valid JSON that is not a request object would otherwise end the worker on .get().
+            stdout.write(json.dumps({"id": None, "ok": False, "error": {
+                "kind": "parameter", "message": "a request must be a JSON object"}}) + "\n")
+            stdout.flush()
+            continue
+
         response = handle_request(backend, request)
+        response["session_start_seconds"] = _session_start_seconds(backend)
         stdout.write(json.dumps(response) + "\n")
         stdout.flush()
         if request.get("method") == "shutdown":
@@ -193,6 +219,12 @@ def main(argv: list[str] | None = None) -> int:
     except Exception as exc:  # noqa: BLE001 - report why the worker cannot start
         log(f"failed to create backend {args.backend!r}: {type(exc).__name__}: {exc}")
         return 2
+    try:
+        released = backend.release_leftovers()
+        if released:
+            log(f"stopped CODE V processes left by a previous worker: {released}")
+    except Exception as exc:  # noqa: BLE001 - the next session start reports it again
+        log(f"leftover CODE V processes were not released: {type(exc).__name__}: {exc}")
     try:
         return serve(backend, sys.stdin, sys.stdout)
     finally:

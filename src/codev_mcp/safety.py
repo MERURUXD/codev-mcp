@@ -14,8 +14,14 @@ from pathlib import Path
 
 from .errors import ParameterError
 
-#: Characters CODE V treats as command structure rather than as data.
-FORBIDDEN_IN_FILESPEC = (";", "\n", "\r", '"', "'", "*", "?", "|", ">", "<")
+#: Characters CODE V treats as command structure rather than as data. "&" continues the command
+#: on the next line, so an unquoted path ending a command swallowed the command that followed it
+#: (real machine probe, 2026-10-02).
+FORBIDDEN_IN_FILESPEC = (";", "\n", "\r", '"', "'", "*", "?", "|", ">", "<", "&")
+#: A path made only of these characters reaches CODE V unchanged without quotes. Anything else is
+#: quoted: unquoted, "!" starts a comment (sav ...\x!y.len wrote x.len) and $ # @ % ^ , ~ made the
+#: save fail, while each of them was written literally inside double quotes (same probe).
+UNQUOTED_FILESPEC = re.compile(r"^[A-Za-z0-9_.:\\/-]+$")
 FORBIDDEN_IN_GLASS = (";", "\n", "\r", '"', "'", " ", "\t", ",", "=", "$", "%", "&", "|")
 
 GLASS_PATTERN = re.compile(r"^[A-Za-z0-9_.+-]{1,32}$")
@@ -65,11 +71,11 @@ def validate_filespec(raw: str, *, must_exist: bool = False, must_not_exist: boo
 
 
 def command_filespec(path: Path) -> str:
-    """Render a path for a CODE V command, quoted so spaces survive."""
+    """Render a path for a CODE V command, quoted unless it is made of plain characters only."""
     text = str(path)
     if any(character in text for character in FORBIDDEN_IN_FILESPEC):
         raise ParameterError("Unsafe file path reached the command builder.", details={"path": text})
-    return f'"{text}"' if " " in text else text
+    return text if UNQUOTED_FILESPEC.match(text) else f'"{text}"'
 
 
 def validate_glass_name(value: object) -> str:

@@ -20,7 +20,7 @@ Conventions that are encoded here on purpose:
 from __future__ import annotations
 
 from enum import Enum
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -342,6 +342,8 @@ class ParameterEdit(BaseModel):
       pupil specification without converting its type.
     """
 
+    model_config = ConfigDict(extra="forbid")
+
     target: EditTarget = "surface"
     surface: int | None = Field(default=None, description="CODE V surface number to edit.")
     field: int | None = Field(default=None, description="CODE V field number to edit.")
@@ -442,6 +444,8 @@ class FieldSetReplacement(BaseModel):
 class UpdateRequest(BaseModel):
     """A batch of parameter edits, or one replacement of the field set (not both)."""
 
+    model_config = ConfigDict(extra="forbid")
+
     edits: list[ParameterEdit] = Field(default_factory=list)
     field_set: FieldSetReplacement | None = Field(
         default=None,
@@ -506,8 +510,17 @@ class SaveResult(BaseModel):
     raw_output: str | None = None
 
 
+#: Upper bounds that keep one analysis inside the call budget: a spot grid traces grid squared rays
+#: through COM, and the comparison CLIs use the same limits.
+MAX_RAY_GRID = 101
+MAX_FREQUENCIES = 101
+Frequency = Annotated[float, Field(ge=0, allow_inf_nan=False)]
+
+
 class AnalysisOptions(BaseModel):
     """Optional analysis settings; the backend reports what it actually used."""
+
+    model_config = ConfigDict(extra="forbid")
 
     zoom_position: int | None = None
     field_numbers: list[int] | None = Field(
@@ -515,13 +528,22 @@ class AnalysisOptions(BaseModel):
     )
     wavelength_numbers: list[int] | None = None
     ray_grid: int | None = Field(
-        default=None, description="Spot diagram grid size, for example 7 for a 7x7 grid."
+        default=None, ge=1, le=MAX_RAY_GRID,
+        description="Spot diagram grid size, for example 7 for a 7x7 grid (1 to 101).",
     )
-    frequencies: list[float] | None = Field(
-        default=None, description="Spatial frequencies for MTF; the caller always supplies them."
+    frequencies: list[Frequency] | None = Field(
+        default=None, max_length=MAX_FREQUENCIES,
+        description=(
+            "Spatial frequencies for MTF in cycles/mm, finite and nonnegative, at most 101; "
+            "the caller always supplies them."
+        ),
     )
     azimuth: float | None = Field(
-        default=None, description="MTF azimuth in degrees; 0 is tangential."
+        default=None, allow_inf_nan=False,
+        description=(
+            "MTF azimuth in degrees; MTF always reports tangential (0) and sagittal (90), "
+            "so only 0 is accepted."
+        ),
     )
     mtf_type: MtfType = MtfType.DIFFRACTION
     plot_type: NativePlotType | None = Field(
@@ -562,6 +584,8 @@ class ImagePayload(BaseModel):
 
 
 class AnalysisRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     kind: AnalysisKind
     options: AnalysisOptions = Field(default_factory=AnalysisOptions)
 

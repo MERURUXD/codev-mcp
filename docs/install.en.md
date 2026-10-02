@@ -41,9 +41,9 @@ codev-mcp [--backend {simulated,com}] [--working-directory DIR] [--python EXE] [
 | Option | Description |
 | --- | --- |
 | `--backend` | Default `simulated`; `com` drives the real CODE V; `simulated` is for automated tests and its results are always marked simulated |
-| `--working-directory` | The service's own working directory; CODE V sessions run in it, and restore points and result images are written there too (default `<repository>/.codev-run` for source/editable installs; for other installs, give a short writable path explicitly) |
+| `--working-directory` | The service's own working directory; CODE V sessions run in it, and restore points and result images are written there too (default `<repository>/.codev-run` for source/editable installs, `%LOCALAPPDATA%\codev-mcp` for other installs) |
 | `--python` | Interpreter for the worker process, by default the same as the current process |
-| `--timeout` | Timeout in seconds for a single tool call; a timeout terminates the stuck worker process |
+| `--timeout` | Timeout in seconds for a single tool call (default 660); a timeout terminates the stuck worker process; a call that has to start a CODE V session gets an additional start budget |
 
 Matching environment variables: `CODEV_MCP_BACKEND`, `CODEV_MCP_WORKDIR`, `CODEV_MCP_PYTHON`, `CODEV_MCP_TIMEOUT`.
 
@@ -86,7 +86,7 @@ Work out which layer the problem is in, in this order.
 
 ### 6.2 A tool returns not_ready
 
-This means the background worker process is unavailable. The `warnings` of `get_status` and the error's `details.stderr` hold the last lines of the worker's stderr. Common causes: missing dependencies, a wrong interpreter path, or the worker process terminated after a call timed out (restarting the service is enough in that case).
+This means the background worker process is unavailable. The `warnings` of `get_status` and the error's `details.stderr` hold the last lines of the worker's stderr. Common causes: missing dependencies, a wrong interpreter path, or the worker process terminated after a call timed out (the next tool call rebuilds the worker automatically and stops the CODE V processes the old one left; reopen the lens that was open).
 
 ### 6.3 Session start is very slow or never returns
 
@@ -138,7 +138,7 @@ Checkpoint location and how to identify them:
 
 A CODE V session that runs for a long time can exit midway, and call overhead varies with the analysis settings. Work in segments and re-establish the session when needed; see [long-session stability](capabilities.en.md#3-limits-and-caveats).
 
-A successful `open_lens` has already created the revision 0 checkpoint, and each later successful `update_lens` advances the revision; as long as the current checkpoint is valid, the next call discards the dead session and automatically restores the lens from the latest successful revision (see 6.5). If no checkpoint has been committed yet, there is no revision to restore (the service does not fall back to the original lens file); restart the service and call `open_lens` again.
+A successful `open_lens` has already created the revision 0 checkpoint, and each later successful `update_lens` advances the revision; as long as the current checkpoint is valid, the next call discards the dead session and automatically restores the lens from the latest successful revision (see 6.5). If no checkpoint has been committed yet, there is no revision to restore (the service does not fall back to the original lens file); restart the service and call `open_lens` again. A first `open_lens` or `create_lens` that fails in an empty session needs no restart: the service drops that session, which may hold a partly loaded lens, returns to the empty state, and the next call starts a new, empty session.
 
 ### 6.7 The session is reported invalid (session_invalid)
 

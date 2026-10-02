@@ -41,9 +41,9 @@ codev-mcp [--backend {simulated,com}] [--working-directory DIR] [--python EXE] [
 | 选项 | 说明 |
 | --- | --- |
 | `--backend` | 默认 `simulated`；`com` 驱动真实 CODE V；`simulated` 用于自动化测试，结果一律标记为 simulated |
-| `--working-directory` | 服务自有工作目录，CODE V 会话在其中运行，恢复点与结果图片也写在这里（源码／可编辑安装默认 `<仓库>/.codev-run`；其他安装方式建议显式指定可写的短路径） |
+| `--working-directory` | 服务自有工作目录，CODE V 会话在其中运行，恢复点与结果图片也写在这里（源码／可编辑安装默认 `<仓库>/.codev-run`；其他安装方式默认 `%LOCALAPPDATA%\codev-mcp`） |
 | `--python` | 运行工作进程的解释器，默认与当前进程相同 |
-| `--timeout` | 单次工具调用的超时秒数，超时会终止卡住的工作进程 |
+| `--timeout` | 单次工具调用的超时秒数（默认 660），超时会终止卡住的工作进程；需要启动 CODE V 会话的调用另加启动预算 |
 
 对应环境变量：`CODEV_MCP_BACKEND`、`CODEV_MCP_WORKDIR`、`CODEV_MCP_PYTHON`、`CODEV_MCP_TIMEOUT`。
 
@@ -86,7 +86,7 @@ $config | ConvertTo-Json -Depth 6
 
 ### 6.2 工具返回 not_ready
 
-含义是后台工作进程不可用。`get_status` 的 `warnings` 与错误 `details.stderr` 里有工作进程 stderr 的最后若干行。常见原因：依赖缺失、解释器路径写错、单次调用超时后工作进程被终止（此时重启服务即可）。
+含义是后台工作进程不可用。`get_status` 的 `warnings` 与错误 `details.stderr` 里有工作进程 stderr 的最后若干行。常见原因：依赖缺失、解释器路径写错、单次调用超时后工作进程被终止（下一次工具调用会自动重建工作进程并清理旧进程留下的 CODE V 进程，之前打开的镜头需要重新打开）。
 
 ### 6.3 会话启动很慢或一直不返回
 
@@ -138,7 +138,7 @@ $config | ConvertTo-Json -Depth 6
 
 长时间运行的 CODE V 会话可能中途退出，调用开销随分析设置变化。建议分段进行，必要时重新建立会话；见[长会话稳定性](capabilities.md#3-限制与注意事项)。
 
-成功 `open_lens` 已建立 revision 0 检查点，后续成功 `update_lens` 会推进版本；只要当前检查点有效，下一次调用会丢弃死会话并自动从最近成功版本恢复镜头（见 6.5）。如果还没有任何提交过的检查点，就没有可恢复的版本（服务不会退回原始镜头文件），请重启服务后重新 `open_lens`。
+成功 `open_lens` 已建立 revision 0 检查点，后续成功 `update_lens` 会推进版本；只要当前检查点有效，下一次调用会丢弃死会话并自动从最近成功版本恢复镜头（见 6.5）。如果还没有任何提交过的检查点，就没有可恢复的版本（服务不会退回原始镜头文件），请重启服务后重新 `open_lens`。空会话里第一次 `open_lens` 或 `create_lens` 失败时则不必重启：服务丢弃这次可能装了半个镜头的会话、回到空状态，下一次调用会启动新的空会话。
 
 ### 6.7 提示会话已失效（session_invalid）
 

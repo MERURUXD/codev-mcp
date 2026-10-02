@@ -168,8 +168,13 @@ class Export(NativePlotTestCase):
         self.assertTrue(Path(first.plot_file_path).exists())
         self.assertTrue(Path(second.plot_file_path).exists())
         # Both runs drew the same plot type, so the unique part cannot be the
-        # task id alone: an earlier run must never be overwritten.
-        self.assertIn("layout", Path(first.plot_file_path).name)
+        # task id alone: an earlier run must never be overwritten. The random
+        # part leads the name, so it survives however much of the rest the
+        # filespec limit cuts off for a long checkout path.
+        prefixes = [Path(path).name[:8] for path in (first.plot_file_path, second.plot_file_path)]
+        for prefix in prefixes:
+            int(prefix, 16)
+        self.assertNotEqual(prefixes[0], prefixes[1])
 
     def test_the_result_says_code_v_drew_it(self):
         result = self.submit_and_finish().native_plot

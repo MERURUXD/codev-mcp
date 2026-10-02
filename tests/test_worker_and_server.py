@@ -18,6 +18,7 @@ import os
 import subprocess
 import sys
 import unittest
+import unittest.mock
 from pathlib import Path
 
 import anyio
@@ -231,6 +232,125 @@ class WorkerProtocol(unittest.TestCase):
         self.assertEqual(process.poll(), 0, "worker did not exit after its input closed")
 
 
+class WorkerTimeoutAndRebuild(unittest.TestCase):
+    """A call that starts CODE V gets its start budget, and a killed worker is replaced (review H1)."""
+
+    def setUp(self) -> None:
+        from tests import workspace_temp_directory
+
+        self._temp = workspace_temp_directory("rebuild")
+        self.addCleanup(self._temp.cleanup)
+        self.root = Path(self._temp.name)
+
+    def test_the_worker_reports_the_start_budget_with_every_response(self):
+        import io
+
+        from codev_mcp import worker
+        from codev_mcp.simulated import SimulatedBackend
+
+        backend = SimulatedBackend(working_directory=str(self.root / "run"))
+        with unittest.mock.patch.object(SimulatedBackend, "session_start_seconds", 42.0):
+            stdout = io.StringIO()
+            worker.serve(backend, io.StringIO('{"id": 1, "method": "ping"}\n'), stdout)
+        self.assertEqual(json.loads(stdout.getvalue())["session_start_seconds"], 42.0)
+
+
+    def test_the_worker_survives_a_non_object_request_and_a_failing_shutdown(self):
+        """Review L6: either one used to end the worker with an uncaught exception."""
+        import io
+
+        from codev_mcp import worker
+        from codev_mcp.simulated import SimulatedBackend
+
+        backend = SimulatedBackend(working_directory=str(self.root / "run"))
+        stdout = io.StringIO()
+        with unittest.mock.patch.object(SimulatedBackend, "stop", side_effect=RuntimeError("stuck")):
+            code = worker.serve(backend, io.StringIO(
+                '[1]\n{"id": 2, "method": "ping"}\n{"id": 3, "method": "shutdown"}\n'), stdout)
+        self.assertEqual(code, 0)
+        replies = [json.loads(line) for line in stdout.getvalue().splitlines()]
+        self.assertEqual([reply["ok"] for reply in replies], [False, True, False])
+        self.assertEqual(replies[0]["error"]["kind"], "parameter")
+        self.assertEqual(replies[2]["error"]["kind"], "internal")
+
+    def test_the_client_adds_the_reported_budget_to_the_next_call(self):
+        import io
+        import queue
+
+        client = WorkerClient("simulated", timeout=5)
+        budgets = iter([100, 0, 0, 0])
+        seen: list[float] = []
+
+        class Process:
+            stdin = io.StringIO()
+            stdout = io.StringIO()
+
+            def poll(self):
+                return None
+
+        class Replies(queue.Queue):
+            def get(self, block=True, timeout=None):
+                seen.append(timeout)
+                return json.dumps({"id": client._next_id, "ok": True, "result": {},
+                                   "session_start_seconds": next(budgets)})
+
+        client._process = Process()
+        client._responses = Replies()
+        client.call("get_status")
+        client.call("open_lens")  # the previous reply said the next call may start CODE V
+        client.call("get_lens")
+        client.call("shutdown", timeout=30)  # an explicit bound stays as given
+        self.assertEqual(seen, [5, 105, 5, 30])
+
+    def test_shutdown_allows_the_backend_its_whole_cleanup(self):
+        from codev_mcp import client as client_module
+
+        client = WorkerClient("simulated", working_directory=str(self.root / "run"), timeout=60)
+        client.start()
+        seen: list[float | None] = []
+        original = client.call
+
+        def recording(method, params=None, *, timeout=None):
+            seen.append(timeout)
+            return original(method, params, timeout=timeout)
+
+        client.call = recording
+        client.close()
+        self.assertEqual(seen, [client_module.SHUTDOWN_TIMEOUT_SECONDS])
+        self.assertGreaterEqual(client_module.SHUTDOWN_TIMEOUT_SECONDS, 90)  # review M9
+
+    def _state(self, **kwargs):
+        from codev_mcp.server import ServiceState
+
+        state = ServiceState("simulated", working_directory=str(self.root / "run"),
+                             python_executable=None, timeout=60, **kwargs)
+        self.addCleanup(state.close)
+        state.start()
+        return state
+
+    def test_a_killed_worker_is_replaced_on_the_next_call(self):
+        state = self._state()
+        old = state.client
+        old._abort("test timeout")
+        self.assertFalse(old.alive)
+        new = state.require()
+        self.assertIsNot(new, old)
+        self.assertTrue(new.alive)
+        self.assertEqual(state.restarts, 1)
+        self.assertEqual(new.call("get_status")["backend"], "simulated")
+
+    def test_a_replacement_that_cannot_start_is_reported_once(self):
+        state = self._state()
+        state.python_executable = str(self.root / "missing-python.exe")
+        state.client._abort("test timeout")
+        with self.assertRaises(NotReadyError):
+            state.require()
+        self.assertIsNone(state.client)
+        with self.assertRaises(NotReadyError):
+            state.require()
+        self.assertEqual(state.restarts, 1)
+
+
 class McpToolSurface(unittest.TestCase):
     """Drives the server through the in-memory MCP transport."""
     def setUp(self) -> None:
@@ -415,6 +535,38 @@ class McpToolSurface(unittest.TestCase):
 
         anyio.run(flow)
 
+
+    def test_a_slow_tool_call_does_not_block_other_requests(self):
+        """Worker calls run in a thread, so the server still answers while one is busy (review M2)."""
+        import threading
+        import time
+
+        original = WorkerClient.call
+        release = threading.Event()
+
+        def slow_call(client, method, params=None, *, timeout=None):
+            if method == "get_lens":
+                release.wait(10)
+            return original(client, method, params, timeout=timeout)
+
+        async def flow() -> None:
+            async with create_connected_server_and_client_session(self._server()) as session:
+                await session.initialize()
+                await session.call_tool("open_lens", {"path": str(self.lens)})
+                async with anyio.create_task_group() as group:
+                    started = time.perf_counter()
+                    group.start_soon(session.call_tool, "get_lens", {})
+                    await anyio.sleep(0.2)
+                    await session.send_ping()
+                    tools = await session.list_tools()
+                    elapsed = time.perf_counter() - started
+                    release.set()
+                self.assertLess(elapsed, 2.0)
+                self.assertEqual({tool.name for tool in tools.tools}, EXPECTED_TOOLS)
+
+        with unittest.mock.patch.object(WorkerClient, "call", slow_call):
+            anyio.run(flow)
+
     def test_a_worker_that_cannot_start_is_reported_not_crashed(self):
         async def flow() -> None:
             # A worker that cannot even be spawned is the cheapest way to reach
@@ -441,6 +593,20 @@ class McpToolSurface(unittest.TestCase):
 
         anyio.run(flow)
 
+
+class ToolErrorSize(unittest.TestCase):
+    def test_a_huge_raw_output_is_cut_to_its_ends(self):
+        """A 2 MB text buffer in an error message overwhelmed MCP clients (review L5)."""
+        from codev_mcp.errors import ComputationError
+        from codev_mcp.server import MAX_ERROR_RAW_OUTPUT, _tool_error
+
+        raw = "Error: first line\n" + "x" * 2_000_000 + "\nlast line"
+        info = parse_tool_error_message(str(_tool_error(ComputationError("boom", raw_output=raw))))
+        self.assertLess(len(info.raw_output), MAX_ERROR_RAW_OUTPUT + 100)
+        self.assertTrue(info.raw_output.startswith("Error: first line"))
+        self.assertTrue(info.raw_output.endswith("last line"))
+        short = parse_tool_error_message(str(_tool_error(ComputationError("boom", raw_output="ok"))))
+        self.assertEqual(short.raw_output, "ok")
 
 class ServerStdioSmokeTest(unittest.TestCase):
     """One raw JSON-RPC round trip over a real stdio subprocess."""
@@ -539,6 +705,16 @@ class ServerConstruction(unittest.TestCase):
     def test_server_builds_without_starting_a_worker(self):
         server = build_server("simulated", start_worker=False)
         self.assertEqual(server.name, "codev-mcp")
+
+    def test_the_default_working_directory_leaves_site_packages_alone(self):
+        """An installed package used to put its runs beside site-packages (review L7)."""
+        from codev_mcp.backend import default_working_directory
+
+        self.assertEqual(Path(default_working_directory()), WORKSPACE / ".codev-run")
+        installed = Path(r"D:\Python\Lib\site-packages\codev_mcp\backend.py")
+        self.assertEqual(
+            Path(default_working_directory(installed, {"LOCALAPPDATA": r"D:\Profile\AppData\Local"})),
+            Path(r"D:\Profile\AppData\Local\codev-mcp"))
 
     def test_unknown_backend_is_rejected(self):
         from codev_mcp.backend import create_backend

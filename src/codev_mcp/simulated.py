@@ -22,7 +22,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from . import __version__
-from .backend import Backend, check_native_plot_options, check_wavefront_options
+from .backend import Backend, check_mtf_azimuth, check_native_plot_options, check_wavefront_options
 from .fieldset import resolve_field_set
 from .modeling import create_commands, plan_structure
 from .errors import (
@@ -1055,6 +1055,8 @@ class SimulatedBackend(Backend):
                 "MTF analysis needs an explicit frequency grid.",
                 hint="Pass options.frequencies, for example [10, 20, 40, 80] cycles/mm.",
             )
+        if request.kind.value == "mtf":
+            check_mtf_azimuth(request.options.azimuth)
         if request.options.zoom_position is not None and not (
             1 <= request.options.zoom_position <= lens.zoom_positions
         ):

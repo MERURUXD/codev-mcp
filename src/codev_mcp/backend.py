@@ -7,6 +7,7 @@ public models or raises a CodeVError subclass.
 
 from __future__ import annotations
 
+import os
 from abc import ABC, abstractmethod
 from pathlib import Path
 
@@ -35,9 +36,20 @@ COM_BACKEND = "com"
 BACKEND_NAMES = (SIMULATED_BACKEND, COM_BACKEND)
 
 
-def default_working_directory() -> str:
-    """Service owned scratch directory, used as the CODE V working directory."""
-    return str(Path(__file__).resolve().parents[2] / ".codev-run")
+def default_working_directory(module_file: str | Path = __file__, environ=None) -> str:
+    """Service owned scratch directory, used as the CODE V working directory.
+
+    A source or editable install keeps ``<repository>/.codev-run``. Any other install would land
+    beside site-packages (for example ``C:\\Python313\\Lib\\.codev-run``), which may not be
+    writable, may be shared by every user of that Python and makes plot paths longer, so it uses
+    ``%LOCALAPPDATA%\\codev-mcp`` instead.
+    """
+    checkout = Path(module_file).resolve().parents[2]
+    if (checkout / "pyproject.toml").is_file():
+        return str(checkout / ".codev-run")
+    environ = os.environ if environ is None else environ
+    base = environ.get("LOCALAPPDATA") or str(Path.home() / "AppData" / "Local")
+    return str(Path(base) / "codev-mcp")
 
 
 def check_native_plot_options(
@@ -96,6 +108,17 @@ def check_native_plot_options(
             "A native plot draws every enabled field and wavelength, so these "
             "settings are not accepted.",
             details={"not_accepted": sorted(not_accepted)},
+        )
+
+
+def check_mtf_azimuth(azimuth: float | None) -> None:
+    """MTF reports the tangential and the sagittal curve; another azimuth would be echoed but unused."""
+    if azimuth not in (None, 0, 0.0):
+        raise ParameterError(
+            "MTF always reports tangential (azimuth 0) and sagittal (azimuth 90) curves; "
+            "another azimuth is not supported.",
+            details={"azimuth": azimuth},
+            hint="Leave azimuth out or pass 0.",
         )
 
 
@@ -190,6 +213,15 @@ class Backend(ABC):
 
     def stop(self) -> None:
         """Release resources held by the backend. Safe to call twice."""
+
+    @property
+    def session_start_seconds(self) -> float:
+        """Extra time the next call may need because it first has to start a session."""
+        return 0.0
+
+    def release_leftovers(self) -> list[int]:
+        """Stop what a killed predecessor left running in this working directory."""
+        return []
 
     def capabilities(self) -> list[CapabilityInfo]:
         return []
