@@ -742,6 +742,31 @@ class SessionRecovery(ComBackendTestCase):
                 backend._get_session()
         self.assertIn("engine crashed", backend._start_error or "")
 
+    def test_a_working_directory_held_by_another_service_is_not_retried(self):
+        from codev_mcp.com_session import WorkingDirectoryInUseError
+
+        class Refused:
+            def start(self):
+                raise WorkingDirectoryInUseError("Another codev-mcp session is using this working directory.",
+                                                 details={"reason": "working_directory_in_use"})
+
+            def stop(self):
+                pass
+
+        backend = self.make_backend([Refused(), self.session], start_attempts=3)
+        backend.start_attempts = 3
+        with unittest.mock.patch("codev_mcp.com_backend.time.sleep") as sleep:
+            with self.assertRaises(WorkingDirectoryInUseError) as caught:
+                backend.open_lens(str(self.lens_path))
+        sleep.assert_not_called()
+        info = caught.exception.to_info()  # reaches the client as not_ready with its details, not session_invalid
+        self.assertEqual(info.kind.value, "not_ready")
+        self.assertEqual(info.details["reason"], "working_directory_in_use")
+        self.assertIsNone(backend._start_error)
+        # Once the other service has released the directory, the next call starts normally.
+        backend.open_lens(str(self.lens_path))
+        self.assertIs(backend._session, self.session)
+
     def test_a_dead_session_is_replaced_by_a_fresh_one(self):
         replacement = FakeCodeVSession()
         self.configure_session(replacement)

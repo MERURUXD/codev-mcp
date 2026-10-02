@@ -58,7 +58,7 @@ $config = @{mcpServers = @{codev = @{command = $pythonPath; args = @('-m', 'code
 $config | ConvertTo-Json -Depth 6
 ```
 
-把生成的 JSON 加入客户端配置。真实后端把 `simulated` 改成 `com`；需要 Windows、CODE V 10.2 的 COM 注册和可用许可证。
+把生成的 JSON 加入客户端配置。真实后端把 `simulated` 改成 `com`；需要 Windows、CODE V 10.2 的 COM 注册和可用许可证。一个工作目录同一时间只供一个服务实例使用；多个客户端同时连接时，每个配置使用不同的 `--working-directory`（见 6.11）。
 真实镜头由用户自行提供绝对 `.len` 路径给 `open_lens`，不需要厂商样例。源码目录之外使用 wheel 安装时，MCP 服务可使用相同配置，工作目录必须可写。独立命令行工具（`compare`、`batch`、`scan`、`scale`、`edit`、`seq_import`、`export_seq`、`glass`、`glass_near`，以及调用 `edit` 的 `schemes`）的引擎工作目录由包的安装位置推出，`--output-dir` 不改变它；wheel 安装时会落在 Python 环境 `Lib` 下的 `.codev-run`，可能不可写。使用这些命令行工具时请按第 2 节在仓库根目录做可编辑安装。
 
 服务的 `serverInfo.version` 来自 MCP SDK；服务版本见 `get_status.service_version`。
@@ -162,3 +162,12 @@ $config | ConvertTo-Json -Depth 6
 每次启动会话时，服务把本次会话创建的 CODE V 进程记录到工作目录的 `codev-mcp-session.json`；下一次启动会先清理这些已确认属于本服务的进程。正常关闭（`close_session` 或客户端断开）会自动停止会话。用户自己启动的 CODE V 图形界面不会被服务接触或结束。
 
 多个会话同时运行时（`schemes --jobs`）：会话启动由机器级互斥量 `Local\codev-mcp-session-start` 排队，最长等待 600 秒；`cvcomsvr.exe` 是所有同时运行的会话共享的 COM 服务器，先启动的会话虽把它记入自己的记录，但只要还有别的会话在用，停止和清理都不会结束它。
+
+### 6.11 提示工作目录正被另一个会话使用
+
+错误为 `not_ready`，`details.reason` 为 `working_directory_in_use`，`details.holder` 给出持有该目录的进程 PID 与启动时间。启动清理会删除工作目录里的恢复文件并结束 `codev-mcp-session.json` 记录的进程，这只对已经退出的旧会话成立；因此会话从启动到停止独占工作目录（锁文件 `codev-mcp-session.lock`），另一个服务实例在同一目录启动时直接拒绝，不做清理，也不在本次调用内重试。被拒绝的服务没有启动会话，也不进入失效状态；目录释放后再次调用即可启动，无需重启服务。
+
+- 多个 MCP 客户端（例如同时打开的两个对话）各自启动服务时，须给每个服务配置不同的 `--working-directory` 或 `CODEV_MCP_WORKDIR`；源码安装的默认目录 `<仓库>/.codev-run` 只能供一个服务使用。
+- 若 `details.holder.pid` 对应的进程已不存在，锁已随它释放，再次调用即可，新会话会按记录清理它留下的进程。
+- 若持有者仍在运行，先在对应客户端调用 `close_session` 或关闭该客户端，再重新调用。
+- 锁文件留在目录中是正常的，不要手工删除；是否被占用以持有进程是否存活为准，与文件是否存在无关。

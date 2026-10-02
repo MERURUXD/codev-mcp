@@ -80,7 +80,7 @@ from .checkpoints import (
     summarise,
     utc_now,
 )
-from .com_session import ERROR_LINE, ComSession, engine_is_alive
+from .com_session import ERROR_LINE, ComSession, WorkingDirectoryInUseError, engine_is_alive
 from .errors import (
     CodeVError,
     ComputationError,
@@ -644,6 +644,8 @@ class ComBackend(Backend):
             # Runs the rebuild, which also records that the lens has to be
             # restored; an invalid or closed session raises here.
             self._require_session()
+        except WorkingDirectoryInUseError:
+            raise  # nothing was started or touched; the caller may call again once the directory is free
         except NotReadyError as exc:
             # A session that was closed on request keeps its own wording, but the
             # refusal is reported as a session that cannot be used.
@@ -1138,6 +1140,10 @@ class ComBackend(Backend):
                     session.stop()
                 except Exception:  # noqa: BLE001 - a failed attempt is abandoned
                     pass
+                if isinstance(exc, WorkingDirectoryInUseError):
+                    # Another live service holds the directory: retrying now cannot help, and the refusal
+                    # touched nothing, so a later call may start once that service has released it.
+                    raise
                 if attempt < attempts:
                     time.sleep(START_RETRY_DELAY_SECONDS)
         self._start_error = f"{type(last_error).__name__}: {last_error}"

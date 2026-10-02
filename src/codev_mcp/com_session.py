@@ -18,7 +18,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from .errors import ComputationError, InternalError, ParameterError, SessionInvalidError
+from .errors import ComputationError, InternalError, NotReadyError, ParameterError, SessionInvalidError
 
 PROG_ID = "CodeV.Command.102"
 CLSID = "{E5900CEA-4A26-11DE-857D-001D09312B62}"
@@ -213,6 +213,87 @@ class _StartupLock:
             self._held = False
 
 
+#: Lock file that marks a working directory as held by one live session. The lock belongs to the open
+#: handle, so the operating system drops it when the holding process exits, however it exits.
+DIRECTORY_LOCK_FILE_NAME = "codev-mcp-session.lock"
+#: The locked byte lies past the holder note, so a refused start can still read who holds the directory.
+DIRECTORY_LOCK_OFFSET = 1 << 20
+
+
+class WorkingDirectoryInUseError(NotReadyError):
+    """Another live session holds the working directory; retrying in the same directory cannot help."""
+
+
+class _DirectoryLock:
+    """Exclusive hold on a working directory for the lifetime of one session; without msvcrt it does nothing.
+
+    The recovery files and the process record in a working directory describe the session that uses it.
+    A start clears both as leftovers of a dead session, so a second session on a directory that a live one
+    still uses would stop that session's engine. Holding this lock from before that cleanup until the
+    session stops makes the second start fail instead.
+    """
+
+    def __init__(self, directory: Path) -> None:
+        self.path = directory / DIRECTORY_LOCK_FILE_NAME
+        self._fd: int | None = None
+
+    def acquire(self) -> None:
+        try:
+            import msvcrt  # noqa: PLC0415 - Windows only, like the rest of the COM layer
+        except ImportError:
+            return
+        import os  # noqa: PLC0415
+
+        fd = os.open(self.path, os.O_RDWR | os.O_CREAT | getattr(os, "O_BINARY", 0))
+        try:
+            os.lseek(fd, DIRECTORY_LOCK_OFFSET, os.SEEK_SET)
+            msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+        except OSError as exc:
+            os.close(fd)
+            raise WorkingDirectoryInUseError(
+                "Another codev-mcp session is using this working directory.",
+                details={"reason": "working_directory_in_use", "working_directory": str(self.path.parent),
+                         "holder": self._read_holder(), "error": str(exc)},
+                hint=("Give each MCP client or service instance its own working directory "
+                      "(--working-directory or CODEV_MCP_WORKDIR), or close the other session first."),
+            ) from exc
+        self._fd = fd
+        note = json.dumps({"service": "codev-mcp", "pid": os.getpid(),
+                           "started_at": time.strftime("%Y-%m-%dT%H:%M:%S")}).encode("utf-8")
+        try:
+            os.ftruncate(fd, 0)
+            os.lseek(fd, 0, os.SEEK_SET)
+            os.write(fd, note)
+        except OSError:  # the note is diagnostics only; the lock itself is held
+            pass
+
+    def _read_holder(self) -> dict[str, Any] | None:
+        try:
+            value = json.loads(self.path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return None
+        return value if isinstance(value, dict) else None
+
+    @property
+    def held(self) -> bool:
+        return self._fd is not None
+
+    def release(self) -> None:
+        if self._fd is None:
+            return
+        import msvcrt  # noqa: PLC0415
+        import os  # noqa: PLC0415
+
+        fd, self._fd = self._fd, None
+        try:
+            os.lseek(fd, DIRECTORY_LOCK_OFFSET, os.SEEK_SET)
+            msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+        except OSError:  # closing the handle drops the lock as well
+            pass
+        finally:
+            os.close(fd)
+
+
 ERROR_LINE = re.compile(r"^\s*Error:")
 NUMBER = re.compile(r"^-?(?:\d+\.?\d*|\.\d+)(?:[Ee][+-]?\d+)?$")
 
@@ -257,6 +338,11 @@ class ComSession:
         self.shared_processes: list[int] = []
         self.cleaned_processes: list[int] = []
         self.engine_pids: set[int] = set()
+        #: Held from before the leftover cleanup until stop, so no second session clears this one's files.
+        self._directory_lock: _DirectoryLock | None = None
+        #: Whether the process record in the working directory was written by this session; only then may
+        #: stop remove it.
+        self._recorded = False
         #: Number of COM calls this session has served. The engine is a 32 bit
         #: process that was observed to exit after a few hundred analysis calls,
         #: so the count is reported to the client.
@@ -281,8 +367,8 @@ class ComSession:
 
         Verified in Phase C: with a leftover codev.rec in the working directory,
         StartCodeV blocks waiting for a recovery prompt that a windowless session
-        can never answer, so the service would hang forever. The working
-        directory belongs to this service, so any recovery file in it is stale.
+        can never answer, so the service would hang forever. start() holds the
+        working directory lock first, so any recovery file in it is stale.
         """
         removed: list[str] = []
         if self.starting_directory is None:
@@ -333,8 +419,21 @@ class ComSession:
                 ),
                 encoding="utf-8",
             )
+            self._recorded = True
         except OSError as exc:  # noqa: PERF203 - diagnostics only
             self._note(f"could not record the session file: {exc}")
+
+    def _hold_directory(self) -> None:
+        if self._directory_lock is not None or self.starting_directory is None:
+            return
+        lock = _DirectoryLock(self.starting_directory)
+        lock.acquire()
+        self._directory_lock = lock
+
+    def _release_directory(self) -> None:
+        lock, self._directory_lock = self._directory_lock, None
+        if lock is not None:
+            lock.release()
 
     def _forget_session(self) -> None:
         path = self.session_file
@@ -396,8 +495,13 @@ class ComSession:
 
         if self.starting_directory is not None:
             self.starting_directory.mkdir(parents=True, exist_ok=True)
-            self.clear_recovery_files()
+            # The recovery files and the process record are only leftovers when no live session holds the
+            # directory; another service on the same directory would otherwise lose its engine here.
+            self._hold_directory()
+            # A dead session's engine can outlive its worker and keep codev.rec open, so its recorded
+            # processes go first; only then can the recovery file be removed.
             self.cleanup_recorded_session()
+            self.clear_recovery_files()
 
         # The record of which processes belong to this session is "what appeared while it started", so two
         # sessions must never start at the same time: each would claim the other's processes and a cleanup
@@ -554,6 +658,14 @@ class ComSession:
 
     def stop(self) -> bool:
         """Close COM and report whether owned process release was confirmed."""
+        try:
+            return self._stop()
+        finally:
+            # A stop that fails part way must still give the directory back: the process lives on, so the lock
+            # would otherwise refuse every later session in it, including this service's own rebuild.
+            self._release_directory()
+
+    def _stop(self) -> bool:
         self._watchdog_stop.set()
         self._watchdog = None
         if self._object is not None:
@@ -580,10 +692,12 @@ class ComSession:
         self.cleanup_remaining = [pid for pid in self.owned_processes if pid not in shared and _matching_owned(
             pid, self.process_identities.get(pid, {"name": self.owned_processes[pid]})) is not False]
         self.cleanup_confirmed = not self.cleanup_remaining
-        if self.cleanup_confirmed:
-            self._forget_session()
-        else:
+        if not self.cleanup_confirmed:
             self._note(f"CODE V process release unconfirmed: {self.cleanup_remaining}")
+        elif self._recorded:
+            # A record this session did not write belongs to another live session (a refused start) or
+            # is a leftover whose cleanup failed; either way it stays for the session that can confirm it.
+            self._forget_session()
         self.closed = True
         if self._pythoncom is not None:
             try:

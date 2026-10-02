@@ -8,6 +8,7 @@ output.
 
 from __future__ import annotations
 
+import os
 import unittest.mock
 import unittest
 from pathlib import Path
@@ -491,6 +492,131 @@ class StartupLock(unittest.TestCase):
                                          lambda *args: order.append("engine") or "10.2")):
             self.assertEqual(session.start(), "10.2")
         self.assertEqual(order, ["lock", "engine", "unlock"])
+
+
+class SharedWorkingDirectory(unittest.TestCase):
+    """Two services on one working directory: the later start must not clean up the live session."""
+
+    ENGINE = {"name": "codevm.exe", "created_at": 100.0}
+
+    def setUp(self):
+        from codev_mcp import com_session
+        self.com_session = com_session
+        self.temp = workspace_temp_directory("shareddir")
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        self.live = {4242: "codevm.exe"}
+        self.killed: list[list[int]] = []
+
+        def kill(pids):
+            self.killed.append(list(pids))
+            for pid in pids:
+                self.live.pop(pid, None)
+            return []
+
+        for patcher in (
+            unittest.mock.patch.object(com_session, "list_codev_processes", side_effect=lambda: dict(self.live)),
+            unittest.mock.patch.object(com_session, "_identity",
+                                       side_effect=lambda pid: dict(self.ENGINE) if pid in self.live else None),
+            unittest.mock.patch.object(com_session, "terminate_processes", side_effect=kill),
+            unittest.mock.patch.object(ComSession, "_start_engine",
+                                       lambda session, *_args: self._fake_engine_start(session)),
+        ):
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def _fake_engine_start(self, session):
+        """Stand in for StartCodeV: record the engine and leave the recovery file CODE V keeps open."""
+        session.owned_processes = {4242: "codevm.exe"}
+        session.process_identities = {4242: dict(self.ENGINE)}
+        session.engine_pids = {4242}
+        session._record_session()
+        (self.root / "codev.rec").write_text("", encoding="utf-8")
+        return "10.2"
+
+    def test_a_second_start_is_refused_while_the_first_session_lives(self):
+        from codev_mcp.errors import NotReadyError
+
+        first = ComSession(starting_directory=self.root)
+        self.assertEqual(first.start(), "10.2")
+        self.addCleanup(first._release_directory)
+
+        second = ComSession(starting_directory=self.root)
+        with self.assertRaises(NotReadyError) as caught:
+            second.start()
+        self.assertEqual(caught.exception.details["reason"], "working_directory_in_use")
+        self.assertEqual(caught.exception.details["holder"]["pid"], os.getpid())
+        self.assertIn("working directory", caught.exception.hint or "")
+        self.assertEqual(self.killed, [])
+        self.assertIn(4242, self.live)
+        self.assertTrue((self.root / "codev.rec").exists())
+        self.assertTrue(first.session_file.exists())
+
+        # Discarding the refused attempt leaves the live session's ownership record alone.
+        self.assertTrue(second.stop())
+        self.assertTrue(first.session_file.exists())
+
+    def test_the_directory_is_free_again_after_a_stop(self):
+        first = ComSession(starting_directory=self.root)
+        first.start()
+        self.live.pop(4242)  # StopCodeV ended the engine
+        self.assertTrue(first.stop())
+
+        self.live[4242] = "codevm.exe"
+        second = ComSession(starting_directory=self.root)
+        self.assertEqual(second.start(), "10.2")
+        self.addCleanup(second._release_directory)
+        self.assertEqual(self.killed, [])
+
+    def test_a_stop_that_fails_part_way_still_frees_the_directory(self):
+        first = ComSession(starting_directory=self.root)
+        first.start()
+        self.live.pop(4242)
+        with unittest.mock.patch.object(ComSession, "_verify_shutdown", side_effect=RuntimeError("boom")):
+            with self.assertRaises(RuntimeError):
+                first.stop()
+        self.assertFalse(first._directory_lock)
+
+        # The same process can start again in the directory, as a rebuild after a lost engine does.
+        self.live[4242] = "codevm.exe"
+        second = ComSession(starting_directory=self.root)
+        self.assertEqual(second.start(), "10.2")
+        self.addCleanup(second._release_directory)
+
+    def test_a_dead_holder_leaves_its_record_to_be_cleaned_up(self):
+        first = ComSession(starting_directory=self.root)
+        first.start()
+        first._release_directory()  # the worker process died; the OS drops its lock, the engine lives on
+
+        # The orphaned engine keeps codev.rec open, so the file can only go once the engine is gone.
+        original_unlink = Path.unlink
+
+        def unlink(path, *args, **kwargs):
+            if path.name == "codev.rec" and 4242 in self.live:
+                raise PermissionError("[WinError 32] the file is in use by another process")
+            return original_unlink(path, *args, **kwargs)
+
+        second = ComSession(starting_directory=self.root)
+        with unittest.mock.patch.object(Path, "unlink", unlink):
+            self.assertEqual(second.start(), "10.2")
+        self.addCleanup(second._release_directory)
+        self.assertEqual(self.killed, [[4242]])
+        self.assertEqual(second.cleaned_processes, [4242])
+        self.assertEqual(second.removed_recovery_files, ["codev.rec"])
+
+    def test_an_unconfirmed_cleanup_keeps_the_record_for_the_next_attempt(self):
+        from codev_mcp.errors import SessionInvalidError
+
+        first = ComSession(starting_directory=self.root)
+        first.start()
+        first._release_directory()
+
+        second = ComSession(starting_directory=self.root)
+        with (unittest.mock.patch.object(self.com_session, "terminate_processes", return_value=[4242]),
+              self.assertRaises(SessionInvalidError)):
+            second.start()
+        self.assertTrue(second.stop())
+        self.assertTrue(first.session_file.exists())
 
 
 if __name__ == "__main__":
